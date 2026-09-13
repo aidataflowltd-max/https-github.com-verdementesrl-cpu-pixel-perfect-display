@@ -25,6 +25,8 @@ export default function NewRequest() {
   const [legalName, setLegalName] = useState('')
   const [vat, setVat] = useState('')
   const [amount, setAmount] = useState('')
+  const [financingType, setFinancingType] = useState('finanziamento')
+  const [financingPurpose, setFinancingPurpose] = useState('')
   const [contactEmail, setContactEmail] = useState('')
   const [contactPhone, setContactPhone] = useState('')
   const [selected, setSelected] = useState<ConnectorType[]>(['banking', 'tax', 'corporate'])
@@ -42,7 +44,6 @@ export default function NewRequest() {
     setSubmitting(true)
     setError(null)
 
-    // upsert azienda per partita IVA
     const { data: existingCompany } = await supabase
       .from('companies')
       .select('id')
@@ -71,6 +72,8 @@ export default function NewRequest() {
         company_id: companyId,
         requested_by: profile.id,
         financing_amount: amount ? Number(amount) : null,
+        financing_type: financingType,
+        financing_purpose: financingPurpose,
         contact_email: contactEmail,
         contact_phone: contactPhone,
         status: 'awaiting_company',
@@ -109,8 +112,16 @@ export default function NewRequest() {
             <h1 className="text-lg font-semibold mb-1">Richiesta creata</h1>
             <p className="text-sm text-black/50 mb-6">Invia questo link sicuro all’impresa per avviare la verifica.</p>
             <div className="bg-paper-dim rounded-lg px-4 py-3 text-sm font-mono break-all text-left mb-4">{inviteLink}</div>
-            <div className="flex gap-3 justify-center">
+            <div className="flex gap-3 justify-center flex-wrap">
               <button className="btn-ghost" onClick={() => navigator.clipboard.writeText(inviteLink)}>Copia link</button>
+              
+                className="btn-verified"
+                href={`mailto:${contactEmail}?subject=${encodeURIComponent('Richiesta di verifica VERIFIED')}&body=${encodeURIComponent(
+                  `Gentile referente di ${legalName},\n\nè stata avviata una richiesta di verifica per l'ottenimento del finanziamento richiesto.\n\nCompleti la verifica in sicurezza a questo link:\n${inviteLink}\n\nIl link è personale e protetto da codice di accesso monouso.`
+                )}`}
+              >
+                Invia via email
+              </a>
               <button className="btn-primary" onClick={() => navigate('/bank/dashboard')}>Vai alla dashboard</button>
             </div>
           </div>
@@ -139,6 +150,21 @@ export default function NewRequest() {
               <div>
                 <label className="label">Importo finanziamento (€)</label>
                 <input className="input" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Tipo di finanziamento</label>
+                <select className="input" value={financingType} onChange={(e) => setFinancingType(e.target.value)}>
+                  <option value="mutuo">Mutuo</option>
+                  <option value="finanziamento">Finanziamento</option>
+                  <option value="leasing">Leasing</option>
+                  <option value="altro">Altro</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Motivo / giustificativo (breve)</label>
+                <input className="input" value={financingPurpose} onChange={(e) => setFinancingPurpose(e.target.value)} placeholder="es. acquisto macchinario, liquidità, immobile…" />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
