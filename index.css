@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --color-ink: #0a0c10;
+  --color-night: #0b1220;
+  --color-night-700: #101a2e;
+  --color-night-600: #16223b;
+  --color-slate-line: #1f2a3d;
+  --color-paper: #f7f8fa;
+  --color-paper-dim: #eef0f3;
+  --color-verified: #17c78b;
+  --color-verified-dim: #0e9c6c;
+  --color-warn: #f2b134;
+  --color-risk: #ef5350;
+  --color-info: #5b8def;
+}
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+  body {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-black/[0.06] rounded-xl shadow-[0_1px_2px_rgba(16,24,40,0.04)];
+  }
+  .badge {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-night px-4 py-2.5 text-sm font-medium text-white transition hover:bg-night-700 disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-verified {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-verified px-4 py-2.5 text-sm font-medium text-white transition hover:bg-verified-dim disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-black/10 bg-white px-4 py-2.5 text-sm font-medium text-ink transition hover:bg-black/[0.03];
+  }
+  .input {
+    @apply w-full rounded-lg border border-black/10 bg-white px-3.5 py-2.5 text-sm outline-none transition focus:border-night focus:ring-2 focus:ring-night/10;
+  }
+  .label {
+    @apply block text-xs font-medium uppercase tracking-wide text-black/50 mb-1.5;
+  }
+}
