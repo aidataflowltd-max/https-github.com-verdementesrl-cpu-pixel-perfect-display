@@ -16,8 +16,24 @@ const SOURCE_OPTIONS: { type: ConnectorType; label: string; hint: string }[] = [
   { type: 'tax', label: 'Dati fiscali (Agenzia Entrate, F24, fatture)', hint: 'Delega/autenticazione diretta con la fonte' },
   { type: 'credit', label: 'Centrale Rischi / Credit Bureau', hint: 'CRIF, Cerved o altro provider configurato' },
   { type: 'corporate', label: 'Camera di Commercio / Bilanci', hint: 'Visure e bilanci da Registro Imprese' },
-  { type: 'document', label: 'Documenti caricati dall’utente', hint: 'Classificati sempre come USER PROVIDED' },
+  { type: 'document', label: 'Documenti caricati dall utente', hint: 'Classificati sempre come USER PROVIDED' },
 ]
+
+function buildMailtoHref(contactEmail, legalName, inviteLink) {
+  const subject = 'Richiesta di verifica VERIFIED'
+  const bodyLines = [
+    'Gentile referente di ' + legalName + ',',
+    '',
+    'e stata avviata una richiesta di verifica per l ottenimento del finanziamento richiesto.',
+    '',
+    'Completi la verifica in sicurezza a questo link:',
+    inviteLink,
+    '',
+    'Il link e personale e protetto da codice di accesso monouso.',
+  ]
+  const body = bodyLines.join('\n')
+  return 'mailto:' + contactEmail + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body)
+}
 
 export default function NewRequest() {
   const { profile } = useAuth()
@@ -29,16 +45,16 @@ export default function NewRequest() {
   const [financingPurpose, setFinancingPurpose] = useState('')
   const [contactEmail, setContactEmail] = useState('')
   const [contactPhone, setContactPhone] = useState('')
-  const [selected, setSelected] = useState<ConnectorType[]>(['banking', 'tax', 'corporate'])
+  const [selected, setSelected] = useState(['banking', 'tax', 'corporate'])
   const [submitting, setSubmitting] = useState(false)
-  const [inviteLink, setInviteLink] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [inviteLink, setInviteLink] = useState(null)
+  const [error, setError] = useState(null)
 
-  function toggle(type: ConnectorType) {
+  function toggle(type) {
     setSelected((s) => (s.includes(type) ? s.filter((t) => t !== type) : [...s, type]))
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e) {
     e.preventDefault()
     if (!profile?.bank_id) return
     setSubmitting(true)
@@ -50,7 +66,7 @@ export default function NewRequest() {
       .eq('vat_number', vat)
       .maybeSingle()
 
-    let companyId = existingCompany?.id as string | undefined
+    let companyId = existingCompany?.id
     if (!companyId) {
       const { data: newCompany, error: companyError } = await supabase
         .from('companies')
@@ -98,7 +114,7 @@ export default function NewRequest() {
       metadata: { legalName, vat, sources: selected },
     })
 
-    const link = `${window.location.origin}/request/${request.invite_token}`
+    const link = window.location.origin + '/request/' + request.invite_token
     setInviteLink(link)
     setSubmitting(false)
   }
@@ -108,18 +124,13 @@ export default function NewRequest() {
       <PortalLayout nav={NAV} title="Bank Portal">
         <div className="px-8 py-8 max-w-xl">
           <div className="card p-8 text-center">
-            <div className="h-10 w-10 rounded-full bg-verified/10 text-verified flex items-center justify-center mx-auto mb-4">✓</div>
+            <div className="h-10 w-10 rounded-full bg-verified/10 text-verified flex items-center justify-center mx-auto mb-4">OK</div>
             <h1 className="text-lg font-semibold mb-1">Richiesta creata</h1>
-            <p className="text-sm text-black/50 mb-6">Invia questo link sicuro all’impresa per avviare la verifica.</p>
+            <p className="text-sm text-black/50 mb-6">Invia questo link sicuro all impresa per avviare la verifica.</p>
             <div className="bg-paper-dim rounded-lg px-4 py-3 text-sm font-mono break-all text-left mb-4">{inviteLink}</div>
             <div className="flex gap-3 justify-center flex-wrap">
               <button className="btn-ghost" onClick={() => navigator.clipboard.writeText(inviteLink)}>Copia link</button>
-              
-                className="btn-verified"
-                href={`mailto:${contactEmail}?subject=${encodeURIComponent('Richiesta di verifica VERIFIED')}&body=${encodeURIComponent(
-                  `Gentile referente di ${legalName},\n\nè stata avviata una richiesta di verifica per l'ottenimento del finanziamento richiesto.\n\nCompleti la verifica in sicurezza a questo link:\n${inviteLink}\n\nIl link è personale e protetto da codice di accesso monouso.`
-                )}`}
-              >
+              <a className="btn-verified" href={buildMailtoHref(contactEmail, legalName, inviteLink)}>
                 Invia via email
               </a>
               <button className="btn-primary" onClick={() => navigate('/bank/dashboard')}>Vai alla dashboard</button>
@@ -134,7 +145,7 @@ export default function NewRequest() {
     <PortalLayout nav={NAV} title="Bank Portal">
       <div className="px-8 py-8 max-w-2xl">
         <h1 className="text-xl font-semibold mb-1">Nuova richiesta di verifica</h1>
-        <p className="text-sm text-black/50 mb-6">Compila i dati dell’impresa e scegli quali fonti richiedere.</p>
+        <p className="text-sm text-black/50 mb-6">Compila i dati dell impresa e scegli quali fonti richiedere.</p>
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="card p-6 space-y-4">
@@ -148,7 +159,7 @@ export default function NewRequest() {
                 <input className="input" required value={vat} onChange={(e) => setVat(e.target.value)} />
               </div>
               <div>
-                <label className="label">Importo finanziamento (€)</label>
+                <label className="label">Importo finanziamento (EUR)</label>
                 <input className="input" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
               </div>
             </div>
@@ -164,7 +175,7 @@ export default function NewRequest() {
               </div>
               <div>
                 <label className="label">Motivo / giustificativo (breve)</label>
-                <input className="input" value={financingPurpose} onChange={(e) => setFinancingPurpose(e.target.value)} placeholder="es. acquisto macchinario, liquidità, immobile…" />
+                <input className="input" value={financingPurpose} onChange={(e) => setFinancingPurpose(e.target.value)} placeholder="es. acquisto macchinario, liquidita, immobile" />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -196,7 +207,7 @@ export default function NewRequest() {
 
           {error && <div className="text-sm text-risk">{error}</div>}
           <button className="btn-verified" disabled={submitting}>
-            {submitting ? 'Creazione in corso…' : 'Genera richiesta e link sicuro'}
+            {submitting ? 'Creazione in corso...' : 'Genera richiesta e link sicuro'}
           </button>
         </form>
       </div>
