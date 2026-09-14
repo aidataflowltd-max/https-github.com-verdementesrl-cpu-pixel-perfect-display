@@ -23,7 +23,7 @@ const FILTERS: { key: string; label: string }[] = [
 
 type Semaforo = 'green' | 'orange' | 'red' | 'gray'
 
-function semaforoFor(status, severities) {
+function semaforoFor(status: string, severities: AnomalySeverity[]): Semaforo {
   if (status === 'expired') return 'red'
   if (severities.includes('high_risk')) return 'red'
   if (status === 'anomalies' || severities.includes('warning') || severities.includes('unverified')) return 'orange'
@@ -31,14 +31,14 @@ function semaforoFor(status, severities) {
   return 'gray'
 }
 
-function SemaforoDot({ value }) {
-  const colors = {
+function SemaforoDot({ value }: { value: Semaforo }) {
+  const colors: Record<Semaforo, string> = {
     green: '#17c78b',
     orange: '#f2b134',
     red: '#ef5350',
     gray: '#c7c9ce',
   }
-  const titles = {
+  const titles: Record<Semaforo, string> = {
     green: 'Va bene',
     orange: 'Da controllare',
     red: 'Problema rilevato',
@@ -49,10 +49,11 @@ function SemaforoDot({ value }) {
 
 export default function BankDashboard() {
   const { profile } = useAuth()
-  const [requests, setRequests] = useState([])
-  const [branchNames, setBranchNames] = useState({})
-  const [requesterNames, setRequesterNames] = useState({})
-  const [severityByRequest, setSeverityByRequest] = useState({})
+  const [requests, setRequests] = useState<VerificationRequest[]>([])
+  const [branchNames, setBranchNames] = useState<Record<string, string>>({})
+  const [requesterNames, setRequesterNames] = useState<Record<string, string>>({})
+  const [severityByRequest, setSeverityByRequest] = useState<Record<string, AnomalySeverity[]>>({})
+  const [progressByRequest, setProgressByRequest] = useState<Record<string, { done: number; total: number }>>({})
   const [filter, setFilter] = useState('all')
   const [branchFilter, setBranchFilter] = useState('all')
   const [loading, setLoading] = useState(true)
@@ -73,28 +74,46 @@ export default function BankDashboard() {
       .eq('bank_id', profile.bank_id)
       .order('created_at', { ascending: false })
 
-    const reqs = data ?? []
+    const reqs = (data ?? []) as VerificationRequest[]
     setRequests(reqs)
 
-    const branchIds = Array.from(new Set(reqs.map((r) => r.branch_id).filter(Boolean)))
-    const requesterIds = Array.from(new Set(reqs.map((r) => r.requested_by).filter(Boolean)))
+    const branchIds = Array.from(new Set(reqs.map((r) => r.branch_id).filter(Boolean))) as string[]
+    const requesterIds = Array.from(new Set(reqs.map((r) => (r as unknown as { requested_by: string | null }).requested_by).filter(Boolean))) as string[]
     const requestIds = reqs.map((r) => r.id)
 
-    const [{ data: branches }, { data: requesters }, { data: anomalies }] = await Promise.all([
+    const [{ data: branches }, { data: requesters }, { data: anomalies }, { data: reqSources }, { data: connectors }] = await Promise.all([
       branchIds.length ? supabase.from('bank_branches').select('id, name').in('id', branchIds) : Promise.resolve({ data: [] }),
       requesterIds.length ? supabase.from('profiles').select('id, full_name').in('id', requesterIds) : Promise.resolve({ data: [] }),
       requestIds.length ? supabase.from('anomalies').select('request_id, severity').in('request_id', requestIds) : Promise.resolve({ data: [] }),
+      requestIds.length ? supabase.from('verification_request_sources').select('request_id').in('request_id', requestIds) : Promise.resolve({ data: [] }),
+      requestIds.length ? supabase.from('source_connectors').select('request_id, status').in('request_id', requestIds) : Promise.resolve({ data: [] }),
     ])
 
-    setBranchNames(Object.fromEntries((branches ?? []).map((b) => [b.id, b.name])))
-    setRequesterNames(Object.fromEntries((requesters ?? []).map((p) => [p.id, p.full_name || '-'])))
+    setBranchNames(Object.fromEntries((branches ?? []).map((b: { id: string; name: string }) => [b.id, b.name])))
+    setRequesterNames(Object.fromEntries((requesters ?? []).map((p: { id: string; full_name: string | null }) => [p.id, p.full_name ?? '—'])))
 
-    const sevMap = {}
-    for (const a of anomalies ?? []) {
+    const sevMap: Record<string, AnomalySeverity[]> = {}
+    for (const a of (anomalies ?? []) as { request_id: string; severity: AnomalySeverity }[]) {
       if (!sevMap[a.request_id]) sevMap[a.request_id] = []
       sevMap[a.request_id].push(a.severity)
     }
     setSeverityByRequest(sevMap)
+
+    // Quante verifiche richieste sono gia' state completate dall'azienda (connector
+    // con stato "connected") rispetto al totale richiesto per quella pratica.
+    const totalMap: Record<string, number> = {}
+    for (const rs of (reqSources ?? []) as { request_id: string }[]) {
+      totalMap[rs.request_id] = (totalMap[rs.request_id] ?? 0) + 1
+    }
+    const doneMap: Record<string, number> = {}
+    for (const c of (connectors ?? []) as { request_id: string; status: string }[]) {
+      if (c.status === 'connected') doneMap[c.request_id] = (doneMap[c.request_id] ?? 0) + 1
+    }
+    const progMap: Record<string, { done: number; total: number }> = {}
+    for (const reqId of requestIds) {
+      progMap[reqId] = { done: doneMap[reqId] ?? 0, total: totalMap[reqId] ?? 0 }
+    }
+    setProgressByRequest(progMap)
 
     setLoading(false)
   }
@@ -113,7 +132,7 @@ export default function BankDashboard() {
           <div>
             <h1 className="text-xl font-semibold">Richieste di verifica</h1>
             <p className="text-sm text-black/50">
-              {isHeadOffice ? 'Vista sede centrale - tutte le filiali' : 'Monitora lo stato delle verifiche della tua filiale'}
+              {isHeadOffice ? 'Vista sede centrale — tutte le filiali' : 'Monitora lo stato delle verifiche della tua filiale'}
             </p>
           </div>
           <Link to="/bank/new-request" className="btn-verified">+ Nuova richiesta</Link>
@@ -169,6 +188,7 @@ export default function BankDashboard() {
                 <th className="px-5 py-3 font-medium">Importo</th>
                 {isHeadOffice && <th className="px-5 py-3 font-medium">Filiale</th>}
                 {isHeadOffice && <th className="px-5 py-3 font-medium">Incaricato</th>}
+                <th className="px-5 py-3 font-medium">Completamento</th>
                 <th className="px-5 py-3 font-medium">Stato</th>
                 <th className="px-5 py-3 font-medium">Creata</th>
                 <th className="px-5 py-3 font-medium"></th>
@@ -176,27 +196,37 @@ export default function BankDashboard() {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={8} className="px-5 py-8 text-center text-black/40">Caricamento...</td></tr>
+                <tr><td colSpan={9} className="px-5 py-8 text-center text-black/40">Caricamento…</td></tr>
               )}
               {!loading && filtered.length === 0 && (
-                <tr><td colSpan={8} className="px-5 py-8 text-center text-black/40">Nessuna richiesta in questa categoria.</td></tr>
+                <tr><td colSpan={9} className="px-5 py-8 text-center text-black/40">Nessuna richiesta in questa categoria.</td></tr>
               )}
               {filtered.map((r) => {
-                const requestedById = r.requested_by
-                const sem = semaforoFor(r.status, severityByRequest[r.id] || [])
+                const requestedById = (r as unknown as { requested_by: string | null }).requested_by
+                const sem = semaforoFor(r.status, severityByRequest[r.id] ?? [])
+                const prog = progressByRequest[r.id]
                 return (
                   <tr key={r.id} className="border-b border-black/[0.04] last:border-0 hover:bg-black/[0.015]">
                     <td className="px-5 py-3.5"><SemaforoDot value={sem} /></td>
-                    <td className="px-5 py-3.5 font-medium">{r.companies?.legal_name || '-'}</td>
+                    <td className="px-5 py-3.5 font-medium">{r.companies?.legal_name ?? '—'}</td>
                     <td className="px-5 py-3.5 text-black/60">
-                      {r.financing_amount ? 'EUR ' + Number(r.financing_amount).toLocaleString('it-IT') : '-'}
+                      {r.financing_amount ? `€${Number(r.financing_amount).toLocaleString('it-IT')}` : '—'}
                     </td>
-                    {isHeadOffice && <td className="px-5 py-3.5 text-black/60">{r.branch_id ? (branchNames[r.branch_id] || '-') : 'Sede centrale'}</td>}
-                    {isHeadOffice && <td className="px-5 py-3.5 text-black/60">{requestedById ? (requesterNames[requestedById] || '-') : '-'}</td>}
+                    {isHeadOffice && <td className="px-5 py-3.5 text-black/60">{r.branch_id ? branchNames[r.branch_id] ?? '—' : 'Sede centrale'}</td>}
+                    {isHeadOffice && <td className="px-5 py-3.5 text-black/60">{requestedById ? requesterNames[requestedById] ?? '—' : '—'}</td>}
+                    <td className="px-5 py-3.5 text-black/60">
+                      {prog && prog.total > 0 ? (
+                        <span className={prog.done === prog.total ? 'text-verified-dim font-medium' : ''}>
+                          {prog.done}/{prog.total} completate
+                        </span>
+                      ) : (
+                        <span className="text-black/30">—</span>
+                      )}
+                    </td>
                     <td className="px-5 py-3.5"><RequestStatusBadge status={r.status} /></td>
                     <td className="px-5 py-3.5 text-black/50">{new Date(r.created_at).toLocaleDateString('it-IT')}</td>
                     <td className="px-5 py-3.5 text-right">
-                      <Link to={`/bank/request/${r.id}`} className="text-sm font-medium text-night hover:underline">Apri</Link>
+                      <Link to={`/bank/request/${r.id}`} className="text-sm font-medium text-night hover:underline">Apri →</Link>
                     </td>
                   </tr>
                 )
