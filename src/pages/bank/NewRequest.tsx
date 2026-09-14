@@ -1,38 +1,39 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PortalLayout } from '../../components/Layout'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthContext'
 import { logAudit } from '../../lib/audit'
-import type { ConnectorType } from '../../lib/types'
+import { sha256File } from '../../lib/hash'
+import { computePreliminaryCheck } from '../../lib/preliminaryCheck'
+import type { ConnectorType, Source } from '../../lib/types'
 
 const NAV = [
   { to: '/bank/dashboard', label: 'Richieste' },
   { to: '/bank/new-request', label: 'Nuova Richiesta' },
 ]
 
-const SOURCE_OPTIONS: { type: ConnectorType; label: string; hint: string }[] = [
-  { type: 'banking', label: 'Conti bancari (Open Banking / AISP)', hint: 'Acquisizione via provider AISP autorizzato' },
-  { type: 'tax', label: 'Dati fiscali (Agenzia Entrate, F24, fatture)', hint: 'Delega/autenticazione diretta con la fonte' },
-  { type: 'credit', label: 'Centrale Rischi / Credit Bureau', hint: 'CRIF, Cerved o altro provider configurato' },
-  { type: 'corporate', label: 'Camera di Commercio / Bilanci', hint: 'Visure e bilanci da Registro Imprese' },
-  { type: 'document', label: 'Documenti caricati dall utente', hint: 'Classificati sempre come USER PROVIDED' },
-]
+const CONNECTOR_LABELS: Record<ConnectorType, string> = {
+  corporate: 'Camera di Commercio / Bilanci',
+  credit: 'Centrale Rischi (CRIF / Banca d\'Italia)',
+  tax: 'Agenzia Entrate / Cassetto Fiscale',
+  banking: 'Banche collegate (Open Banking)',
+  document: 'Documenti',
+}
 
-function buildMailtoHref(contactEmail, legalName, inviteLink) {
+function buildMailtoHref(contactEmail: string, legalName: string, inviteLink: string) {
   const subject = 'Richiesta di verifica VERIFIED'
   const bodyLines = [
     'Gentile referente di ' + legalName + ',',
     '',
-    'e stata avviata una richiesta di verifica per l ottenimento del finanziamento richiesto.',
+    'e\' stata avviata una richiesta di verifica per l\'ottenimento del finanziamento richiesto.',
     '',
     'Completi la verifica in sicurezza a questo link:',
     inviteLink,
     '',
-    'Il link e personale e protetto da codice di accesso monouso.',
+    'Il link e\' personale e protetto da codice di accesso monouso.',
   ]
-  const body = bodyLines.join('\n')
-  return 'mailto:' + contactEmail + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body)
+  return 'mailto:' + contactEmail + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(bodyLines.join('\n'))
 }
 
 export default function NewRequest() {
@@ -40,33 +41,72 @@ export default function NewRequest() {
   const navigate = useNavigate()
   const [legalName, setLegalName] = useState('')
   const [vat, setVat] = useState('')
+  const [existingCompanyInfo, setExistingCompanyInfo] = useState<{ legal_name: string; requestCount: number } | null>(null)
   const [amount, setAmount] = useState('')
   const [financingType, setFinancingType] = useState('finanziamento')
   const [financingPurpose, setFinancingPurpose] = useState('')
   const [contactEmail, setContactEmail] = useState('')
   const [contactPhone, setContactPhone] = useState('')
-  const [selected, setSelected] = useState(['banking', 'tax', 'corporate'])
+  const [sources, setSources] = useState<Source[]>([])
+  const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([])
+  const [branches, setBranches] = useState<{ id: string; name: string; region: string | null }[]>([])
+  const [branchId, setBranchId] = useState('')
+  const [businessPlan, setBusinessPlan] = useState<File | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [inviteLink, setInviteLink] = useState(null)
-  const [error, setError] = useState(null)
+  const [inviteLink, setInviteLink] = useState<string | null>(null)
+  const [checkResult, setCheckResult] = useState<{ score: number; notes: string } | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-  function toggle(type) {
-    setSelected((s) => (s.includes(type) ? s.filter((t) => t !== type) : [...s, type]))
+  useEffect(() => {
+    supabase.from('sources').select('*').order('connector_type').then(({ data }) => setSources((data ?? []) as Source[]))
+  }, [])
+
+  useEffect(() => {
+    if (profile?.branch_id) {
+      setBranchId(profile.branch_id)
+      return
+    }
+    if (profile?.bank_id) {
+      supabase.from('bank_branches').select('id, name, region').eq('bank_id', profile.bank_id).then(({ data }) => setBranches(data ?? []))
+    }
+  }, [profile])
+
+  async function handleVatBlur() {
+    if (!vat) {
+      setExistingCompanyInfo(null)
+      return
+    }
+    const { data: company } = await supabase.from('companies').select('id, legal_name').eq('vat_number', vat).maybeSingle()
+    if (company) {
+      const { count } = await supabase
+        .from('verification_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', company.id)
+      setExistingCompanyInfo({ legal_name: company.legal_name, requestCount: count ?? 0 })
+      setLegalName(company.legal_name)
+    } else {
+      setExistingCompanyInfo(null)
+    }
   }
 
-  async function handleSubmit(e) {
+  function toggleSource(id: string) {
+    setSelectedSourceIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
+  }
+
+  const sourcesByType = sources.reduce<Record<string, Source[]>>((acc, s) => {
+    acc[s.connector_type] = acc[s.connector_type] ?? []
+    acc[s.connector_type].push(s)
+    return acc
+  }, {})
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!profile?.bank_id) return
     setSubmitting(true)
     setError(null)
 
-    const { data: existingCompany } = await supabase
-      .from('companies')
-      .select('id')
-      .eq('vat_number', vat)
-      .maybeSingle()
-
-    let companyId = existingCompany?.id
+    const { data: existingCompany } = await supabase.from('companies').select('id').eq('vat_number', vat).maybeSingle()
+    let companyId = existingCompany?.id as string | undefined
     if (!companyId) {
       const { data: newCompany, error: companyError } = await supabase
         .from('companies')
@@ -90,6 +130,7 @@ export default function NewRequest() {
         financing_amount: amount ? Number(amount) : null,
         financing_type: financingType,
         financing_purpose: financingPurpose,
+        branch_id: branchId || null,
         contact_email: contactEmail,
         contact_phone: contactPhone,
         status: 'awaiting_company',
@@ -103,18 +144,62 @@ export default function NewRequest() {
       return
     }
 
-    await supabase.from('verification_request_sources').insert(
-      selected.map((type) => ({ request_id: request.id, connector_type: type }))
-    )
+    const chosenSources = sources.filter((s) => selectedSourceIds.includes(s.id))
+    if (chosenSources.length > 0) {
+      await supabase.from('verification_request_sources').insert(
+        chosenSources.map((s) => ({ request_id: request.id, connector_type: s.connector_type, source_id: s.id }))
+      )
+    }
+
+    let hasBusinessPlan = false
+    let businessPlanSize = 0
+    if (businessPlan) {
+      const hash = await sha256File(businessPlan)
+      const path = `${request.id}/business-plan-${crypto.randomUUID()}-${businessPlan.name}`
+      const { error: uploadError } = await supabase.storage.from('verified-documents').upload(path, businessPlan)
+      if (!uploadError) {
+        const { data: doc } = await supabase
+          .from('documents')
+          .insert({
+            request_id: request.id,
+            filename: businessPlan.name,
+            mime_type: businessPlan.type,
+            size_bytes: businessPlan.size,
+            storage_path: path,
+            classification: 'user_provided',
+            document_category: 'business_plan',
+            uploaded_by: profile.id,
+          })
+          .select('id')
+          .single()
+        if (doc) {
+          await supabase.from('document_hashes').insert({ document_id: doc.id, algorithm: 'SHA-256', hash })
+        }
+        hasBusinessPlan = true
+        businessPlanSize = businessPlan.size
+      }
+    }
+
+    const check = computePreliminaryCheck({
+      vatNumber: vat,
+      amount: amount ? Number(amount) : null,
+      hasBusinessPlan,
+      businessPlanSizeBytes: businessPlanSize,
+    })
+    await supabase
+      .from('verification_requests')
+      .update({ preliminary_check_score: check.score, preliminary_check_notes: check.notes })
+      .eq('id', request.id)
+    setCheckResult(check)
 
     await logAudit({
       requestId: request.id,
       actorType: 'bank',
       eventType: 'REQUEST_CREATED',
-      metadata: { legalName, vat, sources: selected },
+      metadata: { legalName, vat, sources: chosenSources.map((s) => s.name), hasBusinessPlan },
     })
 
-    const link = window.location.origin + '/request/' + request.invite_token
+    const link = `${window.location.origin}/request/${request.invite_token}`
     setInviteLink(link)
     setSubmitting(false)
   }
@@ -124,15 +209,24 @@ export default function NewRequest() {
       <PortalLayout nav={NAV} title="Bank Portal">
         <div className="px-8 py-8 max-w-xl">
           <div className="card p-8 text-center">
-            <div className="h-10 w-10 rounded-full bg-verified/10 text-verified flex items-center justify-center mx-auto mb-4">OK</div>
+            <div className="h-10 w-10 rounded-full bg-verified/10 text-verified flex items-center justify-center mx-auto mb-4">✓</div>
             <h1 className="text-lg font-semibold mb-1">Richiesta creata</h1>
-            <p className="text-sm text-black/50 mb-6">Invia questo link sicuro all impresa per avviare la verifica.</p>
+            <p className="text-sm text-black/50 mb-6">Invia questo link sicuro all’impresa per avviare la verifica.</p>
             <div className="bg-paper-dim rounded-lg px-4 py-3 text-sm font-mono break-all text-left mb-4">{inviteLink}</div>
+
+            {checkResult && (
+              <div className="bg-paper-dim rounded-lg px-4 py-3 text-left mb-4">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs uppercase tracking-wide text-black/40">Controllo preliminare automatico</span>
+                  <span className="font-semibold">{checkResult.score}/100</span>
+                </div>
+                <p className="text-xs text-black/50">{checkResult.notes}</p>
+              </div>
+            )}
+
             <div className="flex gap-3 justify-center flex-wrap">
               <button className="btn-ghost" onClick={() => navigator.clipboard.writeText(inviteLink)}>Copia link</button>
-              <a className="btn-verified" href={buildMailtoHref(contactEmail, legalName, inviteLink)}>
-                Invia via email
-              </a>
+              <a className="btn-verified" href={buildMailtoHref(contactEmail, legalName, inviteLink)}>Invia via email</a>
               <button className="btn-primary" onClick={() => navigate('/bank/dashboard')}>Vai alla dashboard</button>
             </div>
           </div>
@@ -145,39 +239,61 @@ export default function NewRequest() {
     <PortalLayout nav={NAV} title="Bank Portal">
       <div className="px-8 py-8 max-w-2xl">
         <h1 className="text-xl font-semibold mb-1">Nuova richiesta di verifica</h1>
-        <p className="text-sm text-black/50 mb-6">Compila i dati dell impresa e scegli quali fonti richiedere.</p>
+        <p className="text-sm text-black/50 mb-6">Compila i dati dell’impresa e scegli quali fonti richiedere.</p>
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="card p-6 space-y-4">
-            <div>
-              <label className="label">Ragione sociale</label>
-              <input className="input" required value={legalName} onChange={(e) => setLegalName(e.target.value)} />
-            </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">Partita IVA / Codice Fiscale</label>
-                <input className="input" required value={vat} onChange={(e) => setVat(e.target.value)} />
+                <input className="input" required value={vat} onChange={(e) => setVat(e.target.value)} onBlur={handleVatBlur} />
               </div>
               <div>
-                <label className="label">Importo finanziamento (EUR)</label>
-                <input className="input" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+                <label className="label">Ragione sociale</label>
+                <input className="input" required value={legalName} onChange={(e) => setLegalName(e.target.value)} />
               </div>
             </div>
+
+            {existingCompanyInfo && (
+              <div className="text-xs bg-verified/10 text-verified-dim rounded-lg px-3 py-2">
+                Azienda già in anagrafica: <strong>{existingCompanyInfo.legal_name}</strong> — {existingCompanyInfo.requestCount} richieste precedenti.
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="label">Tipo di finanziamento</label>
+                <label className="label">Importo finanziamento (€)</label>
+                <input className="input" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Tipo di prodotto</label>
                 <select className="input" value={financingType} onChange={(e) => setFinancingType(e.target.value)}>
                   <option value="mutuo">Mutuo</option>
                   <option value="finanziamento">Finanziamento</option>
                   <option value="leasing">Leasing</option>
+                  <option value="anticipo_fatture">Anticipo Fatture</option>
                   <option value="altro">Altro</option>
                 </select>
               </div>
-              <div>
-                <label className="label">Motivo / giustificativo (breve)</label>
-                <input className="input" value={financingPurpose} onChange={(e) => setFinancingPurpose(e.target.value)} placeholder="es. acquisto macchinario, liquidita, immobile" />
-              </div>
             </div>
+
+            <div>
+              <label className="label">Motivo / giustificativo (breve)</label>
+              <input className="input" value={financingPurpose} onChange={(e) => setFinancingPurpose(e.target.value)} placeholder="es. acquisto macchinario, liquidità, immobile…" />
+            </div>
+
+            {branches.length > 0 && (
+              <div>
+                <label className="label">Filiale</label>
+                <select className="input" value={branchId} onChange={(e) => setBranchId(e.target.value)}>
+                  <option value="">Sede centrale / nessuna filiale</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name}{b.region ? ' - ' + b.region : ''}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">Email referente impresa</label>
@@ -188,26 +304,45 @@ export default function NewRequest() {
                 <input className="input" value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} />
               </div>
             </div>
+
+            <div>
+              <label className="label">Business plan / preventivo (opzionale)</label>
+              <input className="input" type="file" onChange={(e) => setBusinessPlan(e.target.files?.[0] ?? null)} />
+              <p className="text-xs text-black/40 mt-1">
+                Viene sottoposto a un controllo preliminare automatico basato su regole (non un'analisi AI del contenuto).
+              </p>
+            </div>
           </div>
 
           <div className="card p-6">
             <div className="label mb-3">Fonti da richiedere</div>
-            <div className="space-y-2">
-              {SOURCE_OPTIONS.map((opt) => (
-                <label key={opt.type} className="flex items-start gap-3 p-3 rounded-lg border border-black/[0.06] hover:bg-black/[0.015] cursor-pointer">
-                  <input type="checkbox" className="mt-1" checked={selected.includes(opt.type)} onChange={() => toggle(opt.type)} />
-                  <div>
-                    <div className="text-sm font-medium">{opt.label}</div>
-                    <div className="text-xs text-black/50">{opt.hint}</div>
+            <div className="space-y-4">
+              {Object.entries(CONNECTOR_LABELS).map(([type, label]) => {
+                const list = sourcesByType[type] ?? []
+                if (list.length === 0) return null
+                return (
+                  <div key={type}>
+                    <div className="text-xs font-medium text-black/50 mb-1.5">{label}</div>
+                    <div className="space-y-1.5">
+                      {list.map((s) => (
+                        <label key={s.id} className="flex items-center gap-3 p-2.5 rounded-lg border border-black/[0.06] hover:bg-black/[0.015] cursor-pointer">
+                          <input type="checkbox" checked={selectedSourceIds.includes(s.id)} onChange={() => toggleSource(s.id)} />
+                          <div className="text-sm">{s.name}</div>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </label>
-              ))}
+                )
+              })}
+              {sources.length === 0 && (
+                <p className="text-xs text-black/40">Nessuna fonte configurata: chiedi al Super Admin di caricarle.</p>
+              )}
             </div>
           </div>
 
           {error && <div className="text-sm text-risk">{error}</div>}
           <button className="btn-verified" disabled={submitting}>
-            {submitting ? 'Creazione in corso...' : 'Genera richiesta e link sicuro'}
+            {submitting ? 'Creazione in corso…' : 'Genera richiesta e link sicuro'}
           </button>
         </form>
       </div>

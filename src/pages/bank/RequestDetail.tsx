@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useLocation } from 'react-router-dom'
 import { PortalLayout } from '../../components/Layout'
 import { RequestStatusBadge, VerificationBadge, ConnectorStatusBadge, AnomalyBadge } from '../../components/StatusBadge'
 import { supabase } from '../../lib/supabase'
@@ -15,15 +15,27 @@ import type {
   Snapshot,
 } from '../../lib/types'
 
-const NAV = [
+const BANK_NAV = [
   { to: '/bank/dashboard', label: 'Richieste' },
   { to: '/bank/new-request', label: 'Nuova Richiesta' },
+]
+
+const BROKER_NAV = [
+  { to: '/broker/dashboard', label: 'Pratiche' },
+  { to: '/broker/new-check', label: 'Nuova Pre-Verifica' },
 ]
 
 const TABS = ['Snapshot', 'Fonti', 'Documenti', 'Cross-check', 'Anomalie', 'Audit'] as const
 
 export default function RequestDetail() {
   const { id } = useParams()
+  const location = useLocation()
+  const isBroker = location.pathname.startsWith('/broker')
+  const NAV = isBroker ? BROKER_NAV : BANK_NAV
+  const PORTAL_TITLE = isBroker ? 'Broker Portal' : 'Bank Portal'
+  const [banks, setBanks] = useState<{ id: string; name: string }[]>([])
+  const [selectedBankId, setSelectedBankId] = useState('')
+  const [forwarding, setForwarding] = useState(false)
   const [request, setRequest] = useState<VerificationRequest | null>(null)
   const [connectors, setConnectors] = useState<SourceConnector[]>([])
   const [documents, setDocuments] = useState<DocumentRow[]>([])
@@ -56,7 +68,23 @@ export default function RequestDetail() {
     setChecks((chks ?? []) as CrossSourceCheck[])
     setAnomalies((anom ?? []) as Anomaly[])
     setSnapshot(snap as Snapshot | null)
-    if (snap) await logAudit({ requestId: id, actorType: 'bank', eventType: 'BANK_VIEWED_SNAPSHOT' })
+    if (snap) await logAudit({ requestId: id, actorType: isBroker ? 'admin' : 'bank', eventType: 'BANK_VIEWED_SNAPSHOT' })
+
+    if (isBroker) {
+      const { data: bankList } = await supabase.from('banks').select('id, name').order('name')
+      setBanks(bankList ?? [])
+    }
+  }
+
+  async function forwardToBank() {
+    if (!request || !selectedBankId) return
+    setForwarding(true)
+    const { error } = await supabase.rpc('broker_forward_to_bank', { p_request_id: request.id, p_bank_id: selectedBankId })
+    setForwarding(false)
+    if (!error) {
+      await logAudit({ requestId: request.id, actorType: 'admin', eventType: 'REQUEST_CREATED', metadata: { forwardedToBankId: selectedBankId } })
+      load()
+    }
   }
 
   async function generateSnapshot() {
@@ -93,7 +121,9 @@ export default function RequestDetail() {
       .single()
 
     if (!error && newSnapshot) {
-      await supabase.from('verification_requests').update({ status: anomalies.length > 0 ? 'anomalies' : 'completed' }).eq('id', request.id)
+      if (request.status !== 'preliminary') {
+        await supabase.from('verification_requests').update({ status: anomalies.length > 0 ? 'anomalies' : 'completed' }).eq('id', request.id)
+      }
       await logAudit({ requestId: request.id, actorType: 'bank', eventType: 'SNAPSHOT_CREATED', metadata: { code } })
       await logAudit({ requestId: request.id, actorType: 'bank', eventType: 'SNAPSHOT_LOCKED', metadata: { code } })
       setSnapshot(newSnapshot as Snapshot)
@@ -103,14 +133,14 @@ export default function RequestDetail() {
 
   if (!request) {
     return (
-      <PortalLayout nav={NAV} title="Bank Portal">
+      <PortalLayout nav={NAV} title={PORTAL_TITLE}>
         <div className="px-8 py-8 text-black/40 text-sm">Caricamento…</div>
       </PortalLayout>
     )
   }
 
   return (
-    <PortalLayout nav={NAV} title="Bank Portal">
+    <PortalLayout nav={NAV} title={PORTAL_TITLE}>
       <div className="px-8 py-8 max-w-5xl">
         <div className="flex items-start justify-between mb-2">
           <div>
@@ -120,6 +150,24 @@ export default function RequestDetail() {
           </div>
           <RequestStatusBadge status={request.status} />
         </div>
+
+        {request.financing_amount != null && (
+          <div className="text-sm text-black/50 mb-1">
+            {request.financing_type && <span className="capitalize">{request.financing_type.replaceAll('_', ' ')}</span>}
+            {request.financing_amount != null && <span> · €{Number(request.financing_amount).toLocaleString('it-IT')}</span>}
+            {request.financing_purpose && <span> · {request.financing_purpose}</span>}
+          </div>
+        )}
+
+        {request.preliminary_check_score != null && (
+          <div className="card p-5 mt-4 border-black/[0.06]">
+            <div className="flex items-center justify-between mb-2">
+              <div className="label mb-0">Controllo preliminare automatico</div>
+              <span className="badge bg-verified/10 text-verified-dim">{request.preliminary_check_score}/100</span>
+            </div>
+            <p className="text-xs text-black/50 leading-relaxed">{request.preliminary_check_notes}</p>
+          </div>
+        )}
 
         <div className="flex gap-1 mt-6 mb-6 border-b border-black/[0.06]">
           {TABS.map((t) => (
@@ -183,6 +231,27 @@ export default function RequestDetail() {
                   </div>
                   <div className="font-mono text-xs break-all text-black/50">{snapshot.dataset_hash}</div>
                 </div>
+
+                {isBroker && request.status === 'preliminary' && (
+                  <div className="card p-6 border-verified/30">
+                    <div className="label mb-3">Inoltra a banca</div>
+                    <p className="text-sm text-black/50 mb-4">
+                      In base al Data Trust Score sopra, scegli se e a quale banca inoltrare questa pratica.
+                      Una volta inoltrata, la banca la vedrà nella propria dashboard.
+                    </p>
+                    <div className="flex gap-3">
+                      <select className="input" value={selectedBankId} onChange={(e) => setSelectedBankId(e.target.value)}>
+                        <option value="">Seleziona banca…</option>
+                        {banks.map((b) => (
+                          <option key={b.id} value={b.id}>{b.name}</option>
+                        ))}
+                      </select>
+                      <button className="btn-verified whitespace-nowrap" disabled={!selectedBankId || forwarding} onClick={forwardToBank}>
+                        {forwarding ? 'Inoltro…' : 'Inoltra pratica'}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

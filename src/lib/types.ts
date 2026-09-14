@@ -1,6 +1,6 @@
-export type UserRole = 'super_admin' | 'bank_admin' | 'bank_user' | 'company_contact'
+export type UserRole = 'super_admin' | 'bank_admin' | 'bank_user' | 'company_contact' | 'broker_admin' | 'broker_user'
 
-export type RequestStatus = 'new' | 'awaiting_company' | 'in_verification' | 'completed' | 'anomalies' | 'expired'
+export type RequestStatus = 'new' | 'awaiting_company' | 'in_verification' | 'completed' | 'anomalies' | 'expired' | 'preliminary'
 
 export type VerificationLevel =
   | 'not_configured'
@@ -20,6 +20,25 @@ export interface Profile {
   full_name: string | null
   bank_id: string | null
   company_id: string | null
+  branch_id: string | null
+  broker_id: string | null
+}
+
+export interface BankBranch {
+  id: string
+  bank_id: string
+  name: string
+  region: string | null
+  province: string | null
+  created_at: string
+}
+
+export interface Broker {
+  id: string
+  name: string
+  vat_number: string | null
+  status: string
+  created_at: string
 }
 
 export interface Bank {
@@ -41,10 +60,16 @@ export interface Company {
 
 export interface VerificationRequest {
   id: string
-  bank_id: string
+  bank_id: string | null
+  broker_id: string | null
+  branch_id: string | null
   company_id: string
   invite_token: string
   financing_amount: number | null
+  financing_type: string | null
+  financing_purpose: string | null
+  preliminary_check_score: number | null
+  preliminary_check_notes: string | null
   status: RequestStatus
   contact_email: string | null
   contact_phone: string | null
@@ -52,6 +77,8 @@ export interface VerificationRequest {
   created_at: string
   companies?: Company
   banks?: Bank
+  bank_branches?: BankBranch
+  brokers?: Broker
 }
 
 export interface Source {
@@ -89,6 +116,7 @@ export interface DocumentRow {
   size_bytes: number | null
   storage_path: string
   classification: string
+  document_category: string | null
   created_at: string
 }
 
