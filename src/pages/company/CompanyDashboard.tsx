@@ -22,6 +22,7 @@ export default function CompanyDashboard() {
   const [request, setRequest] = useState<VerificationRequest | null>(null)
   const [connectors, setConnectors] = useState<SourceConnector[]>([])
   const [sources, setSources] = useState<{ id: string; name: string; connector_type: ConnectorType; status: string }[]>([])
+  const [requestedSources, setRequestedSources] = useState<{ id: string; source_id: string | null; connector_type: ConnectorType }[]>([])
   const [uploading, setUploading] = useState(false)
 
   useEffect(() => {
@@ -29,14 +30,16 @@ export default function CompanyDashboard() {
   }, [id])
 
   async function load() {
-    const [{ data: req }, { data: conn }, { data: srcs }] = await Promise.all([
+    const [{ data: req }, { data: conn }, { data: srcs }, { data: reqSrcs }] = await Promise.all([
       supabase.from('verification_requests').select('*, banks(*), companies(*)').eq('id', id).single(),
       supabase.from('source_connectors').select('*, sources(*)').eq('request_id', id),
       supabase.from('sources').select('id, name, connector_type, status'),
+      supabase.from('verification_request_sources').select('id, source_id, connector_type').eq('request_id', id),
     ])
     setRequest(req as VerificationRequest)
     setConnectors((conn ?? []) as SourceConnector[])
     setSources(srcs ?? [])
+    setRequestedSources(reqSrcs ?? [])
   }
 
   async function connectSource(sourceId: string, type: ConnectorType) {
@@ -116,8 +119,24 @@ export default function CompanyDashboard() {
 
   if (!request) return <div className="min-h-screen flex items-center justify-center text-sm text-black/40">Caricamento…</div>
 
-  const progress = connectors.length > 0
-    ? Math.round((connectors.filter((c) => c.status === 'connected').length / connectors.length) * 100)
+  // La checklist mostra esattamente le verifiche che la banca ha richiesto per QUESTA
+  // pratica (non un elenco generico fisso), cosi' l'azienda vede solo link/azioni
+  // pertinenti — come un vero elenco di cose da completare, non una lista statica.
+  const checklist = requestedSources.map((rs) => {
+    const source = rs.source_id ? sources.find((s) => s.id === rs.source_id) : null
+    const connector = connectors.find((c) => c.source_id === rs.source_id || (!rs.source_id && c.sources?.connector_type === rs.connector_type))
+    return {
+      key: rs.id,
+      label: source?.name ?? SECTION_LABEL[rs.connector_type] ?? rs.connector_type,
+      connectorType: rs.connector_type,
+      sourceId: rs.source_id,
+      sourceAvailable: source?.status === 'connected',
+      connector,
+    }
+  })
+
+  const progress = checklist.length > 0
+    ? Math.round((checklist.filter((c) => c.connector && c.connector.status === 'connected').length / checklist.length) * 100)
     : 0
 
   return (
@@ -145,42 +164,47 @@ export default function CompanyDashboard() {
         </div>
 
         <div className="space-y-3">
-          {Object.entries(SECTION_LABEL).map(([type, label]) => {
-            const typedSources = sources.filter((s) => s.connector_type === (type as ConnectorType))
-            const connectorForType = connectors.find((c) => c.sources?.connector_type === type)
-
-            return (
-              <div key={type} className="card p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="font-medium text-sm tracking-wide">{label}</div>
-                  {connectorForType ? (
-                    <ConnectorStatusBadge status={connectorForType.status} />
-                  ) : (
-                    <span className="badge bg-black/5 text-black/40">DA VERIFICARE</span>
-                  )}
-                </div>
-
-                {type === 'document' ? (
-                  <label className="btn-ghost cursor-pointer inline-flex">
-                    {uploading ? 'Caricamento…' : 'Carica documento'}
-                    <input type="file" className="hidden" onChange={handleUpload} disabled={uploading} />
-                  </label>
-                ) : connectorForType ? (
-                  <div className="text-xs text-black/50">
-                    {connectorForType.status === 'not_configured'
-                      ? 'Questa fonte non dispone ancora di un\'integrazione reale attiva. Nessun dato è stato acquisito.'
-                      : `Acquisito il ${new Date(connectorForType.acquired_at!).toLocaleString('it-IT')}`}
-                  </div>
-                ) : typedSources.length > 0 ? (
-                  <button className="btn-primary" onClick={() => connectSource(typedSources[0].id, type as ConnectorType)}>
-                    Avvia verifica
-                  </button>
+          {checklist.length === 0 && (
+            <div className="card p-5 text-sm text-black/40 text-center">
+              La banca non ha richiesto verifiche specifiche su questa pratica. Puoi comunque caricare documenti qui sotto.
+            </div>
+          )}
+          {checklist.map((item) => (
+            <div key={item.key} className="card p-5">
+              <div className="flex items-center justify-between mb-3">
+                <div className="font-medium text-sm tracking-wide">{item.label}</div>
+                {item.connector ? (
+                  <ConnectorStatusBadge status={item.connector.status} />
                 ) : (
-                  <div className="text-xs text-black/40">Nessun connector configurato per questa categoria.</div>
+                  <span className="badge bg-black/5 text-black/40">DA VERIFICARE</span>
                 )}
               </div>
-            )
-          })}
+
+              {item.connector ? (
+                <div className="text-xs text-black/50">
+                  {item.connector.status === 'not_configured'
+                    ? 'Questa fonte non dispone ancora di un\'integrazione reale attiva. Nessun dato è stato acquisito.'
+                    : `Acquisito il ${item.connector.acquired_at ? new Date(item.connector.acquired_at).toLocaleString('it-IT') : '—'} — ${item.connector.authentication_method ?? 'provenienza registrata'}`}
+                </div>
+              ) : item.sourceId ? (
+                <button className="btn-primary" onClick={() => connectSource(item.sourceId!, item.connectorType)}>
+                  Avvia verifica
+                </button>
+              ) : (
+                <div className="text-xs text-black/40">Fonte non ancora identificata per questa categoria.</div>
+              )}
+            </div>
+          ))}
+
+          <div className="card p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div className="font-medium text-sm tracking-wide">DOCUMENTI (facoltativo)</div>
+            </div>
+            <label className="btn-ghost cursor-pointer inline-flex">
+              {uploading ? 'Caricamento…' : 'Carica documento'}
+              <input type="file" className="hidden" onChange={handleUpload} disabled={uploading} />
+            </label>
+          </div>
         </div>
       </div>
     </div>
