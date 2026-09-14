@@ -56,6 +56,8 @@ export default function NewRequest() {
   const [inviteLink, setInviteLink] = useState<string | null>(null)
   const [checkResult, setCheckResult] = useState<{ score: number; notes: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [viesStatus, setViesStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid' | 'error'>('idle')
+  const [viesName, setViesName] = useState<string | null>(null)
 
   useEffect(() => {
     supabase.from('sources').select('*').order('connector_type').then(({ data }) => setSources((data ?? []) as Source[]))
@@ -72,10 +74,14 @@ export default function NewRequest() {
   }, [profile])
 
   async function handleVatBlur() {
+    setViesStatus('idle')
+    setViesName(null)
     if (!vat) {
       setExistingCompanyInfo(null)
       return
     }
+    const vatDigits = vat.replace(/\D/g, '')
+
     const { data: company } = await supabase.from('companies').select('id, legal_name').eq('vat_number', vat).maybeSingle()
     if (company) {
       const { count } = await supabase
@@ -84,8 +90,27 @@ export default function NewRequest() {
         .eq('company_id', company.id)
       setExistingCompanyInfo({ legal_name: company.legal_name, requestCount: count ?? 0 })
       setLegalName(company.legal_name)
+      return
+    }
+
+    setExistingCompanyInfo(null)
+
+    if (vatDigits.length !== 11) return
+    setViesStatus('checking')
+    const { data: viesData, error: viesError } = await supabase.rpc('check_vat_vies', { p_country: 'IT', p_vat: vatDigits })
+    if (viesError || !viesData || viesData.error) {
+      setViesStatus('error')
+      return
+    }
+    if (viesData.valid) {
+      setViesStatus('valid')
+      const name = typeof viesData.name === 'string' ? viesData.name.trim() : ''
+      if (name && name !== '---' && name.toLowerCase() !== 'unavailable') {
+        setViesName(name)
+        if (!legalName) setLegalName(name)
+      }
     } else {
-      setExistingCompanyInfo(null)
+      setViesStatus('invalid')
     }
   }
 
@@ -257,6 +282,26 @@ export default function NewRequest() {
             {existingCompanyInfo && (
               <div className="text-xs bg-verified/10 text-verified-dim rounded-lg px-3 py-2">
                 Azienda già in anagrafica: <strong>{existingCompanyInfo.legal_name}</strong> — {existingCompanyInfo.requestCount} richieste precedenti.
+              </div>
+            )}
+
+            {!existingCompanyInfo && viesStatus === 'checking' && (
+              <div className="text-xs bg-black/5 text-black/50 rounded-lg px-3 py-2">Verifica P.IVA in corso su VIES (Commissione Europea)…</div>
+            )}
+            {!existingCompanyInfo && viesStatus === 'valid' && (
+              <div className="text-xs bg-verified/10 text-verified-dim rounded-lg px-3 py-2">
+                P.IVA valida e attiva (fonte: VIES, verifica ufficiale UE in tempo reale).
+                {viesName ? <> Ragione sociale rilevata: <strong>{viesName}</strong>.</> : ' Per questa P.IVA VIES non restituisce la ragione sociale: inseriscila a mano qui sotto.'}
+              </div>
+            )}
+            {!existingCompanyInfo && viesStatus === 'invalid' && (
+              <div className="text-xs bg-risk/10 text-risk rounded-lg px-3 py-2">
+                Attenzione: VIES segnala questa P.IVA come NON valida o non attiva.
+              </div>
+            )}
+            {!existingCompanyInfo && viesStatus === 'error' && (
+              <div className="text-xs bg-black/5 text-black/40 rounded-lg px-3 py-2">
+                Verifica VIES non disponibile in questo momento. Puoi comunque proseguire inserendo i dati a mano.
               </div>
             )}
 
