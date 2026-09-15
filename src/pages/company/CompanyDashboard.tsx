@@ -16,6 +16,23 @@ const SECTION_LABEL: Record<ConnectorType, string> = {
   document: 'DOCUMENTI',
 }
 
+const FIELD_OPTIONS = [
+  { key: 'fatturato', label: 'Fatturato' },
+  { key: 'ebitda', label: 'EBITDA' },
+  { key: 'utile_netto', label: 'Utile netto' },
+  { key: 'patrimonio_netto', label: 'Patrimonio netto' },
+  { key: 'debiti_bancari', label: 'Debiti bancari' },
+  { key: 'liquidita', label: 'Liquidità disponibile' },
+  { key: 'iva_a_debito', label: 'IVA a debito' },
+]
+
+const DECLARED_SOURCE_NAMES = [
+  'Bilancio (dichiarato dall\'azienda)',
+  'Dichiarazione IVA (dichiarata dall\'azienda)',
+  'Estratto conto bancario (dichiarato dall\'azienda)',
+  'Business plan / preventivo (dichiarato dall\'azienda)',
+]
+
 export default function CompanyDashboard() {
   const { id } = useParams()
   const { session } = useAuth()
@@ -24,22 +41,52 @@ export default function CompanyDashboard() {
   const [sources, setSources] = useState<{ id: string; name: string; connector_type: ConnectorType; status: string }[]>([])
   const [requestedSources, setRequestedSources] = useState<{ id: string; source_id: string | null; connector_type: ConnectorType }[]>([])
   const [uploading, setUploading] = useState(false)
+  const [declaredSources, setDeclaredSources] = useState<{ id: string; name: string }[]>([])
+  const [declaredValues, setDeclaredValues] = useState<{ id: string; field_name: string; field_value: string | null; sources?: { name: string }[] }[]>([])
+  const [fieldKey, setFieldKey] = useState(FIELD_OPTIONS[0].key)
+  const [fieldValue, setFieldValue] = useState('')
+  const [fieldSourceId, setFieldSourceId] = useState('')
+  const [savingField, setSavingField] = useState(false)
 
   useEffect(() => {
     if (id) load()
   }, [id])
 
   async function load() {
-    const [{ data: req }, { data: conn }, { data: srcs }, { data: reqSrcs }] = await Promise.all([
+    const [{ data: req }, { data: conn }, { data: srcs }, { data: reqSrcs }, { data: declared }, { data: values }] = await Promise.all([
       supabase.from('verification_requests').select('*, banks(*), companies(*)').eq('id', id).single(),
       supabase.from('source_connectors').select('*, sources(*)').eq('request_id', id),
       supabase.from('sources').select('id, name, connector_type, status'),
       supabase.from('verification_request_sources').select('id, source_id, connector_type').eq('request_id', id),
+      supabase.from('sources').select('id, name').in('name', DECLARED_SOURCE_NAMES),
+      supabase.from('data_provenance').select('id, field_name, field_value, sources(name)').eq('request_id', id).order('acquired_at', { ascending: false }),
     ])
     setRequest(req as VerificationRequest)
     setConnectors((conn ?? []) as SourceConnector[])
     setSources(srcs ?? [])
     setRequestedSources(reqSrcs ?? [])
+    setDeclaredSources(declared ?? [])
+    setDeclaredValues((values ?? []) as { id: string; field_name: string; field_value: string | null; sources?: { name: string }[] }[])
+    if (!fieldSourceId && declared && declared.length > 0) setFieldSourceId(declared[0].id)
+  }
+
+  async function addDeclaredValue() {
+    if (!request || !fieldValue || !fieldSourceId) return
+    setSavingField(true)
+    await supabase.from('data_provenance').insert({
+      request_id: request.id,
+      company_id: request.company_id,
+      source_id: fieldSourceId,
+      field_name: fieldKey,
+      field_value: fieldValue,
+      verification_level: 'user_provided',
+      confidence: 50,
+    })
+    await logAudit({ requestId: request.id, actorType: 'company', eventType: 'DATA_ACQUIRED', metadata: { field: fieldKey, declared: true } })
+    await runCrossSourceReconciliation(request.id)
+    setFieldValue('')
+    setSavingField(false)
+    load()
   }
 
   async function connectSource(sourceId: string, type: ConnectorType) {
@@ -204,6 +251,54 @@ export default function CompanyDashboard() {
               {uploading ? 'Caricamento…' : 'Carica documento'}
               <input type="file" className="hidden" onChange={handleUpload} disabled={uploading} />
             </label>
+          </div>
+
+          <div className="card p-5">
+            <div className="font-medium text-sm tracking-wide mb-1">DATI FINANZIARI DICHIARATI</div>
+            <p className="text-xs text-black/50 mb-4">
+              Inserisci qui le stesse voci (es. fatturato) così come risultano da documenti diversi che possiedi
+              (bilancio, dichiarazione IVA, estratto conto). Il sistema confronta automaticamente i valori tra loro:
+              se coincidono viene segnato come coerente, se differiscono oltre soglia genera un'anomalia visibile alla banca.
+              Questi dati restano etichettati "dichiarati dall'azienda", non sono una fonte verificata automaticamente.
+            </p>
+
+            <div className="grid grid-cols-3 gap-3 mb-4">
+              <select className="input" value={fieldKey} onChange={(e) => setFieldKey(e.target.value)}>
+                {FIELD_OPTIONS.map((f) => (
+                  <option key={f.key} value={f.key}>{f.label}</option>
+                ))}
+              </select>
+              <input
+                className="input"
+                type="number"
+                placeholder="Valore (€)"
+                value={fieldValue}
+                onChange={(e) => setFieldValue(e.target.value)}
+              />
+              <select className="input" value={fieldSourceId} onChange={(e) => setFieldSourceId(e.target.value)}>
+                {declaredSources.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+            <button className="btn-ghost mb-4" disabled={!fieldValue || savingField} onClick={addDeclaredValue}>
+              {savingField ? 'Salvataggio…' : '+ Aggiungi valore'}
+            </button>
+
+            {declaredValues.length > 0 && (
+              <div className="border-t border-black/[0.06] pt-3 space-y-1.5">
+                {declaredValues.map((v) => (
+                  <div key={v.id} className="flex items-center justify-between text-xs">
+                    <span className="text-black/60">
+                      {FIELD_OPTIONS.find((f) => f.key === v.field_name)?.label ?? v.field_name} — {v.sources?.[0]?.name ?? '—'}
+                    </span>
+                    <span className="font-medium">
+                      {v.field_value ? `€${Number(v.field_value).toLocaleString('it-IT')}` : '—'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
