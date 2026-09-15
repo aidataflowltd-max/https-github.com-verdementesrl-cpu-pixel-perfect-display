@@ -5,6 +5,7 @@ import { RequestStatusBadge, VerificationBadge, ConnectorStatusBadge, AnomalyBad
 import { supabase } from '../../lib/supabase'
 import { computeTrustScore } from '../../lib/trustScore'
 import { logAudit } from '../../lib/audit'
+import { useAuth } from '../../lib/AuthContext'
 import type {
   VerificationRequest,
   SourceConnector,
@@ -15,10 +16,11 @@ import type {
   Snapshot,
 } from '../../lib/types'
 
-const BANK_NAV = [
+const BANK_NAV_BASE = [
   { to: '/bank/dashboard', label: 'Richieste' },
   { to: '/bank/new-request', label: 'Nuova Richiesta' },
 ]
+const BANK_NAV_ADMIN = [...BANK_NAV_BASE, { to: '/bank/team', label: 'Team' }]
 
 const BROKER_NAV = [
   { to: '/broker/dashboard', label: 'Pratiche' },
@@ -41,7 +43,8 @@ export default function RequestDetail() {
   const { id } = useParams()
   const location = useLocation()
   const isBroker = location.pathname.startsWith('/broker')
-  const NAV = isBroker ? BROKER_NAV : BANK_NAV
+  const { profile } = useAuth()
+  const NAV = isBroker ? BROKER_NAV : (profile?.role === 'bank_admin' ? BANK_NAV_ADMIN : BANK_NAV_BASE)
   const PORTAL_TITLE = isBroker ? 'Broker Portal' : 'Bank Portal'
   const [banks, setBanks] = useState<{ id: string; name: string }[]>([])
   const [selectedBankId, setSelectedBankId] = useState('')

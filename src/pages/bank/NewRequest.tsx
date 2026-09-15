@@ -8,10 +8,11 @@ import { sha256File, sha256String } from '../../lib/hash'
 import { computePreliminaryCheck } from '../../lib/preliminaryCheck'
 import type { ConnectorType, Source } from '../../lib/types'
 
-const NAV = [
+const NAV_BASE = [
   { to: '/bank/dashboard', label: 'Richieste' },
   { to: '/bank/new-request', label: 'Nuova Richiesta' },
 ]
+const NAV_ADMIN = [...NAV_BASE, { to: '/bank/team', label: 'Team' }]
 
 const CONNECTOR_LABELS: Record<ConnectorType, string> = {
   corporate: 'Camera di Commercio / Bilanci',
@@ -21,10 +22,6 @@ const CONNECTOR_LABELS: Record<ConnectorType, string> = {
   document: 'Documenti',
 }
 
-// Livelli di verifica: pacchetti preimpostati di fonti. Ogni livello e'
-// cumulativo (include le fonti dei livelli precedenti) ma resta sempre
-// modificabile a mano dalla banca dopo la selezione — questo e' solo un
-// punto di partenza intelligente, non un vincolo.
 type Tier = 1 | 2 | 3
 
 const TIER_INFO: Record<Tier, { label: string; description: string }> = {
@@ -81,6 +78,7 @@ function buildMailtoHref(contactEmail: string, legalName: string, inviteLink: st
 export default function NewRequest() {
   const { profile } = useAuth()
   const navigate = useNavigate()
+  const NAV = profile?.role === 'bank_admin' ? NAV_ADMIN : NAV_BASE
   const [legalName, setLegalName] = useState('')
   const [vat, setVat] = useState('')
   const [existingCompanyInfo, setExistingCompanyInfo] = useState<{ legal_name: string; requestCount: number } | null>(null)
@@ -233,9 +231,6 @@ export default function NewRequest() {
       )
     }
 
-    // Se la fonte VIES era tra quelle richieste e abbiamo gia' interrogato il servizio
-    // ufficiale UE in fase di compilazione, registriamo l'acquisizione reale con la sua
-    // provenienza (nessuna autenticazione personale coinvolta: e' una banca dati pubblica).
     const viesSource = chosenSources.find((s) => s.name === 'Verifica P.IVA (VIES)')
     if (viesSource && viesRaw) {
       const rawJson = JSON.stringify(viesRaw)

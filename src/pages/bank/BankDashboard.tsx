@@ -4,12 +4,14 @@ import { PortalLayout } from '../../components/Layout'
 import { RequestStatusBadge } from '../../components/StatusBadge'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthContext'
+import { logAudit } from '../../lib/audit'
 import type { VerificationRequest, AnomalySeverity } from '../../lib/types'
 
-const NAV = [
+const NAV_BASE = [
   { to: '/bank/dashboard', label: 'Richieste' },
   { to: '/bank/new-request', label: 'Nuova Richiesta' },
 ]
+const NAV_ADMIN = [...NAV_BASE, { to: '/bank/team', label: 'Team' }]
 
 const FILTERS: { key: string; label: string }[] = [
   { key: 'all', label: 'Tutte' },
@@ -58,7 +60,30 @@ export default function BankDashboard() {
   const [branchFilter, setBranchFilter] = useState('all')
   const [loading, setLoading] = useState(true)
 
+  const [vatInput, setVatInput] = useState('')
+  const [vatResult, setVatResult] = useState<{ valid: boolean; name?: string } | 'checking' | 'error' | null>(null)
+
   const isHeadOffice = !profile?.branch_id
+  const isBankAdmin = profile?.role === 'bank_admin'
+  const NAV = isBankAdmin ? NAV_ADMIN : NAV_BASE
+
+  async function quickVatCheck(e: React.FormEvent) {
+    e.preventDefault()
+    const digits = vatInput.replace(/\D/g, '')
+    if (digits.length !== 11) {
+      setVatResult('error')
+      return
+    }
+    setVatResult('checking')
+    const { data, error } = await supabase.rpc('check_vat_vies', { p_country: 'IT', p_vat: digits })
+    if (error || !data) {
+      setVatResult('error')
+      return
+    }
+    const result = data as { valid: boolean; name?: string }
+    setVatResult(result)
+    await logAudit({ actorType: 'bank', eventType: 'VAT_QUICK_CHECK', metadata: { vat: digits, valid: result.valid } })
+  }
 
   useEffect(() => {
     load()
@@ -99,8 +124,6 @@ export default function BankDashboard() {
     }
     setSeverityByRequest(sevMap)
 
-    // Quante verifiche richieste sono gia' state completate dall'azienda (connector
-    // con stato "connected") rispetto al totale richiesto per quella pratica.
     const totalMap: Record<string, number> = {}
     for (const rs of (reqSources ?? []) as { request_id: string }[]) {
       totalMap[rs.request_id] = (totalMap[rs.request_id] ?? 0) + 1
@@ -136,6 +159,46 @@ export default function BankDashboard() {
             </p>
           </div>
           <Link to="/bank/new-request" className="btn-verified">+ Nuova richiesta</Link>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="card p-5">
+            <div className="text-xs text-black/40 uppercase tracking-wide mb-2">Le tue richieste</div>
+            <div className="flex items-end gap-4">
+              <div>
+                <div className="text-2xl font-semibold">{requests.length}</div>
+                <div className="text-xs text-black/40">totali</div>
+              </div>
+              <div>
+                <div className="text-2xl font-semibold text-verified-dim">{requests.filter((r) => r.status === 'completed').length}</div>
+                <div className="text-xs text-black/40">completate</div>
+              </div>
+              <div>
+                <div className="text-2xl font-semibold text-risk">{requests.filter((r) => (severityByRequest[r.id] ?? []).length > 0).length}</div>
+                <div className="text-xs text-black/40">con anomalie</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="card p-5 md:col-span-2">
+            <div className="text-xs text-black/40 uppercase tracking-wide mb-2">Verifica P.IVA rapida</div>
+            <form onSubmit={quickVatCheck} className="flex gap-2">
+              <input
+                className="input flex-1"
+                placeholder="11 cifre, es. 01234567890"
+                value={vatInput}
+                onChange={(e) => { setVatInput(e.target.value); setVatResult(null) }}
+              />
+              <button className="btn-verified shrink-0">Controlla</button>
+            </form>
+            {vatResult === 'checking' && <div className="text-xs text-black/40 mt-2">Verifica in corso su VIES…</div>}
+            {vatResult === 'error' && <div className="text-xs text-risk mt-2">Numero non valido o servizio non raggiungibile.</div>}
+            {vatResult && typeof vatResult === 'object' && (
+              <div className={`text-xs mt-2 ${vatResult.valid ? 'text-verified-dim' : 'text-risk'}`}>
+                {vatResult.valid ? `Valida su VIES${vatResult.name ? ' — ' + vatResult.name : ''}` : 'Non valida su VIES'}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex gap-2 mb-3 flex-wrap">
