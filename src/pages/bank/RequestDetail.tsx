@@ -25,7 +25,17 @@ const BROKER_NAV = [
   { to: '/broker/new-check', label: 'Nuova Pre-Verifica' },
 ]
 
-const TABS = ['Snapshot', 'Fonti', 'Documenti', 'Cross-check', 'Anomalie', 'Audit'] as const
+const TABS = ['Snapshot', 'Dati', 'Fonti', 'Documenti', 'Cross-check', 'Anomalie', 'Audit'] as const
+
+const FIELD_LABELS: Record<string, string> = {
+  fatturato: 'Fatturato',
+  ebitda: 'EBITDA',
+  utile_netto: 'Utile netto',
+  patrimonio_netto: 'Patrimonio netto',
+  debiti_bancari: 'Debiti bancari',
+  liquidita: 'Liquidità disponibile',
+  iva_a_debito: 'IVA a debito',
+}
 
 export default function RequestDetail() {
   const { id } = useParams()
@@ -39,12 +49,12 @@ export default function RequestDetail() {
   const [request, setRequest] = useState<VerificationRequest | null>(null)
   const [connectors, setConnectors] = useState<SourceConnector[]>([])
   const [documents, setDocuments] = useState<DocumentRow[]>([])
-  const [provenance, setProvenance] = useState<DataProvenance[]>([])
+  const [provenance, setProvenance] = useState<(DataProvenance & { sources?: { name: string } | { name: string }[] })[]>([])
   const [checks, setChecks] = useState<CrossSourceCheck[]>([])
   const [anomalies, setAnomalies] = useState<Anomaly[]>([])
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [tab, setTab] = useState<(typeof TABS)[number]>('Snapshot')
-  const [provenanceOpen, setProvenanceOpen] = useState<DataProvenance | null>(null)
+  const [provenanceOpen, setProvenanceOpen] = useState<(DataProvenance & { sources?: { name: string } | { name: string }[] }) | null>(null)
 
   useEffect(() => {
     if (id) load()
@@ -56,7 +66,7 @@ export default function RequestDetail() {
       supabase.from('verification_requests').select('*, companies(*), banks(*)').eq('id', id).single(),
       supabase.from('source_connectors').select('*, sources(*)').eq('request_id', id),
       supabase.from('documents').select('*').eq('request_id', id),
-      supabase.from('data_provenance').select('*').eq('request_id', id),
+      supabase.from('data_provenance').select('*, sources(name)').eq('request_id', id).order('acquired_at', { ascending: false }),
       supabase.from('cross_source_checks').select('*').eq('request_id', id),
       supabase.from('anomalies').select('*').eq('request_id', id).order('created_at', { ascending: false }),
       supabase.from('snapshots').select('*').eq('request_id', id).order('version', { ascending: false }).limit(1).maybeSingle(),
@@ -64,7 +74,7 @@ export default function RequestDetail() {
     setRequest(req as VerificationRequest)
     setConnectors((conn ?? []) as SourceConnector[])
     setDocuments((docs ?? []) as DocumentRow[])
-    setProvenance((prov ?? []) as DataProvenance[])
+    setProvenance((prov ?? []) as (DataProvenance & { sources?: { name: string } | { name: string }[] })[])
     setChecks((chks ?? []) as CrossSourceCheck[])
     setAnomalies((anom ?? []) as Anomaly[])
     setSnapshot(snap as Snapshot | null)
@@ -257,6 +267,43 @@ export default function RequestDetail() {
           </div>
         )}
 
+        {tab === 'Dati' && (
+          <div className="card overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-black/[0.06] text-left text-xs text-black/40 uppercase">
+                  <th className="px-5 py-3">Voce</th>
+                  <th className="px-5 py-3">Valore</th>
+                  <th className="px-5 py-3">Fonte</th>
+                  <th className="px-5 py-3">Livello verifica</th>
+                  <th className="px-5 py-3"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {provenance.length === 0 && (
+                  <tr><td colSpan={5} className="px-5 py-8 text-center text-black/40">Nessun dato dichiarato o acquisito ancora per questa pratica.</td></tr>
+                )}
+                {provenance.map((p) => {
+                  const sourceName = Array.isArray(p.sources) ? p.sources[0]?.name : p.sources?.name
+                  return (
+                    <tr key={p.id} className="border-b border-black/[0.04] last:border-0">
+                      <td className="px-5 py-3.5 font-medium">{FIELD_LABELS[p.field_name] ?? p.field_name}</td>
+                      <td className="px-5 py-3.5 text-black/70">{p.field_value ? `€${Number(p.field_value).toLocaleString('it-IT')}` : p.field_value ?? '—'}</td>
+                      <td className="px-5 py-3.5 text-black/50">{sourceName ?? '—'}</td>
+                      <td className="px-5 py-3.5"><VerificationBadge level={p.verification_level} /></td>
+                      <td className="px-5 py-3.5 text-right">
+                        <button className="text-sm font-medium text-night hover:underline" onClick={() => setProvenanceOpen(p)}>
+                          Come lo sai? →
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {tab === 'Fonti' && (
           <div className="card overflow-hidden">
             <table className="w-full text-sm">
@@ -264,6 +311,7 @@ export default function RequestDetail() {
                 <tr className="border-b border-black/[0.06] text-left text-xs text-black/40 uppercase">
                   <th className="px-5 py-3">Fonte</th>
                   <th className="px-5 py-3">Tipo</th>
+                  <th className="px-5 py-3">Provenienza / autenticazione</th>
                   <th className="px-5 py-3">Stato connector</th>
                   <th className="px-5 py-3">Livello verifica</th>
                   <th className="px-5 py-3">Acquisito</th>
@@ -271,12 +319,13 @@ export default function RequestDetail() {
               </thead>
               <tbody>
                 {connectors.length === 0 && (
-                  <tr><td colSpan={5} className="px-5 py-8 text-center text-black/40">Nessuna fonte collegata.</td></tr>
+                  <tr><td colSpan={6} className="px-5 py-8 text-center text-black/40">Nessuna fonte collegata.</td></tr>
                 )}
                 {connectors.map((c) => (
                   <tr key={c.id} className="border-b border-black/[0.04] last:border-0">
                     <td className="px-5 py-3.5 font-medium">{c.sources?.name}</td>
                     <td className="px-5 py-3.5 text-black/60">{c.sources?.connector_type}</td>
+                    <td className="px-5 py-3.5 text-black/50 text-xs">{c.authentication_method ?? '—'}</td>
                     <td className="px-5 py-3.5"><ConnectorStatusBadge status={c.status} /></td>
                     <td className="px-5 py-3.5"><VerificationBadge level={c.verification_level} /></td>
                     <td className="px-5 py-3.5 text-black/50">{c.acquired_at ? new Date(c.acquired_at).toLocaleString('it-IT') : '—'}</td>
@@ -354,13 +403,79 @@ export default function RequestDetail() {
 
       {provenanceOpen && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-end z-50" onClick={() => setProvenanceOpen(null)}>
-          <div className="bg-white h-full w-96 p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h2 className="font-semibold mb-4">Provenienza dato</h2>
-            <div className="text-sm text-black/60">{provenanceOpen.field_name}</div>
+          <div className="bg-white h-full w-96 p-6 shadow-xl overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="font-semibold">Come lo sai?</h2>
+              <button className="text-black/40 hover:text-black" onClick={() => setProvenanceOpen(null)}>✕</button>
+            </div>
+            <p className="text-xs text-black/40 mb-5">Catena completa di provenienza di questo dato.</p>
+
+            <div className="space-y-4">
+              <ProvenanceRow label="Voce" value={FIELD_LABELS[provenanceOpen.field_name] ?? provenanceOpen.field_name} />
+              <ProvenanceRow
+                label="Valore"
+                value={provenanceOpen.field_value ? `€${Number(provenanceOpen.field_value).toLocaleString('it-IT')}` : provenanceOpen.field_value ?? '—'}
+              />
+              <ProvenanceRow
+                label="Fonte"
+                value={(Array.isArray(provenanceOpen.sources) ? provenanceOpen.sources[0]?.name : provenanceOpen.sources?.name) ?? '—'}
+              />
+              <ProvenanceRow
+                label="Periodo"
+                value={
+                  provenanceOpen.period_start || provenanceOpen.period_end
+                    ? `${provenanceOpen.period_start ?? '—'} → ${provenanceOpen.period_end ?? '—'}`
+                    : 'Non specificato'
+                }
+              />
+              <ProvenanceRow label="Acquisito il" value={new Date(provenanceOpen.acquired_at).toLocaleString('it-IT')} />
+              <ProvenanceRow label="ID acquisizione" value={provenanceOpen.acquisition_id ?? '—'} mono />
+              <ProvenanceRow label="ID autorizzazione" value={provenanceOpen.authorization_id ?? '—'} mono />
+              <ProvenanceRow label="Hash SHA-256" value={provenanceOpen.hash ?? 'non calcolato'} mono />
+              <div>
+                <div className="text-xs text-black/40 uppercase tracking-wide mb-1">Livello di verifica</div>
+                <VerificationBadge level={provenanceOpen.verification_level} />
+              </div>
+
+              <div>
+                <div className="text-xs text-black/40 uppercase tracking-wide mb-2">Coerenza con altre fonti</div>
+                {(() => {
+                  const related = checks.filter((c) => c.field_name === provenanceOpen.field_name)
+                  if (related.length === 0) {
+                    return <div className="text-xs text-black/40">Nessun confronto disponibile: al momento questa è l'unica fonte per questa voce.</div>
+                  }
+                  return (
+                    <div className="space-y-2">
+                      {related.map((c) => (
+                        <div key={c.id} className="text-xs border border-black/[0.06] rounded-lg px-3 py-2">
+                          <div className="text-black/60 mb-0.5">{c.source_a} ↔ {c.source_b}</div>
+                          <div className={c.result === 'consistent' ? 'text-verified-dim font-medium' : c.result === 'discrepancy' ? 'text-risk font-medium' : 'text-black/40'}>
+                            {c.result === 'consistent' ? '🟢 Coerente' : c.result === 'discrepancy' ? `🟡 Differenza ${c.difference_pct}%` : '⚪ Dati insufficienti'}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
+              </div>
+
+              <div className="text-xs text-black/40 pt-3 border-t border-black/[0.06]">
+                Questa è la fotografia esatta di ciò che il sistema aveva acquisito e verificato al momento indicato sopra. Se il dato cambia in seguito, verrà registrata una nuova acquisizione, non una modifica di questa.
+              </div>
+            </div>
           </div>
         </div>
       )}
     </PortalLayout>
+  )
+}
+
+function ProvenanceRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div>
+      <div className="text-xs text-black/40 uppercase tracking-wide mb-0.5">{label}</div>
+      <div className={mono ? 'font-mono text-xs break-all text-black/70' : 'text-sm text-black/80'}>{value}</div>
+    </div>
   )
 }
 
