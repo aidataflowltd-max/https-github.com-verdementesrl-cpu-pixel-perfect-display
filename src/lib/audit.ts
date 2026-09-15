@@ -16,6 +16,7 @@ export type AuditEventType =
   | 'BANK_VIEWED_SNAPSHOT'
   | 'REQUEST_CREATED'
   | 'ADMIN_ACTION'
+  | 'ANOMALY_JUSTIFIED'
 
 export async function logAudit(params: {
   requestId?: string | null

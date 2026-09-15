@@ -186,6 +186,7 @@ export default function BankDashboard() {
                 <th className="px-5 py-3 font-medium"></th>
                 <th className="px-5 py-3 font-medium">Azienda</th>
                 <th className="px-5 py-3 font-medium">Importo</th>
+                <th className="px-5 py-3 font-medium">Livello</th>
                 {isHeadOffice && <th className="px-5 py-3 font-medium">Filiale</th>}
                 {isHeadOffice && <th className="px-5 py-3 font-medium">Incaricato</th>}
                 <th className="px-5 py-3 font-medium">Completamento</th>
@@ -196,10 +197,10 @@ export default function BankDashboard() {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={9} className="px-5 py-8 text-center text-black/40">Caricamento…</td></tr>
+                <tr><td colSpan={10} className="px-5 py-8 text-center text-black/40">Caricamento…</td></tr>
               )}
               {!loading && filtered.length === 0 && (
-                <tr><td colSpan={9} className="px-5 py-8 text-center text-black/40">Nessuna richiesta in questa categoria.</td></tr>
+                <tr><td colSpan={10} className="px-5 py-8 text-center text-black/40">Nessuna richiesta in questa categoria.</td></tr>
               )}
               {filtered.map((r) => {
                 const requestedById = (r as unknown as { requested_by: string | null }).requested_by
@@ -208,10 +209,19 @@ export default function BankDashboard() {
                 return (
                   <tr key={r.id} className="border-b border-black/[0.04] last:border-0 hover:bg-black/[0.015]">
                     <td className="px-5 py-3.5"><SemaforoDot value={sem} /></td>
-                    <td className="px-5 py-3.5 font-medium">{r.companies?.legal_name ?? '—'}</td>
+                    <td className="px-5 py-3.5 font-medium">
+                      {r.company_id ? (
+                        <Link to={`/bank/company/${r.company_id}`} className="hover:underline" onClick={(e) => e.stopPropagation()}>
+                          {r.companies?.legal_name ?? '—'}
+                        </Link>
+                      ) : (
+                        r.companies?.legal_name ?? '—'
+                      )}
+                    </td>
                     <td className="px-5 py-3.5 text-black/60">
                       {r.financing_amount ? `€${Number(r.financing_amount).toLocaleString('it-IT')}` : '—'}
                     </td>
+                    <td className="px-5 py-3.5 text-black/60">{r.verification_tier != null ? `Livello ${r.verification_tier}` : '—'}</td>
                     {isHeadOffice && <td className="px-5 py-3.5 text-black/60">{r.branch_id ? branchNames[r.branch_id] ?? '—' : 'Sede centrale'}</td>}
                     {isHeadOffice && <td className="px-5 py-3.5 text-black/60">{requestedById ? requesterNames[requestedById] ?? '—' : '—'}</td>}
                     <td className="px-5 py-3.5 text-black/60">

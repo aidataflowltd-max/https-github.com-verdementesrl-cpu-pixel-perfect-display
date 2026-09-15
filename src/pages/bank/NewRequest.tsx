@@ -4,7 +4,7 @@ import { PortalLayout } from '../../components/Layout'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthContext'
 import { logAudit } from '../../lib/audit'
-import { sha256File } from '../../lib/hash'
+import { sha256File, sha256String } from '../../lib/hash'
 import { computePreliminaryCheck } from '../../lib/preliminaryCheck'
 import type { ConnectorType, Source } from '../../lib/types'
 
@@ -19,6 +19,48 @@ const CONNECTOR_LABELS: Record<ConnectorType, string> = {
   tax: 'Agenzia Entrate / Cassetto Fiscale',
   banking: 'Banche collegate (Open Banking)',
   document: 'Documenti',
+}
+
+// Livelli di verifica: pacchetti preimpostati di fonti. Ogni livello e'
+// cumulativo (include le fonti dei livelli precedenti) ma resta sempre
+// modificabile a mano dalla banca dopo la selezione — questo e' solo un
+// punto di partenza intelligente, non un vincolo.
+type Tier = 1 | 2 | 3
+
+const TIER_INFO: Record<Tier, { label: string; description: string }> = {
+  1: {
+    label: 'Livello 1 — Base',
+    description: 'Controllo rapido: validita\' P.IVA e visura camerale. La banca puo\' comunque integrare e gestire il resto a mano.',
+  },
+  2: {
+    label: 'Livello 2 — Standard',
+    description: 'Aggiunge bilanci, DURC/DURF (regolarita\' contributiva e fiscale), conto corrente e Cassetto Fiscale.',
+  },
+  3: {
+    label: 'Livello 3 — Avanzato',
+    description: 'Aggiunge il controllo pesante sulla persona fisica (identita\', poteri di firma, protesti e pregiudizievoli) e le centrali rischi (CRIF, Banca d\'Italia, Cerved).',
+  },
+}
+
+const TIER_SOURCE_NAMES: Record<Tier, string[]> = {
+  1: [
+    'Verifica P.IVA (VIES)',
+    'Registro Imprese — Visure e Bilanci',
+  ],
+  2: [
+    'Bilancio (dichiarato dall\'azienda)',
+    'DURC — Documento Unico di Regolarita\' Contributiva',
+    'DURF — Regolarita\' Fiscale',
+    'Open Banking — Conti Correnti',
+    'Agenzia delle Entrate — Cassetto Fiscale',
+  ],
+  3: [
+    'Persona Fisica — Identita\' e Poteri di Firma',
+    'Persona Fisica — Protesti e Pregiudizievoli',
+    'CRIF — Centrale Rischi Privata',
+    'Centrale dei Rischi — Banca d\'Italia',
+    'Cerved — Report Andamentale',
+  ],
 }
 
 function buildMailtoHref(contactEmail: string, legalName: string, inviteLink: string) {
@@ -49,6 +91,7 @@ export default function NewRequest() {
   const [contactPhone, setContactPhone] = useState('')
   const [sources, setSources] = useState<Source[]>([])
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([])
+  const [tier, setTier] = useState<Tier | null>(null)
   const [branches, setBranches] = useState<{ id: string; name: string; region: string | null }[]>([])
   const [branchId, setBranchId] = useState('')
   const [businessPlan, setBusinessPlan] = useState<File | null>(null)
@@ -58,6 +101,7 @@ export default function NewRequest() {
   const [error, setError] = useState<string | null>(null)
   const [viesStatus, setViesStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid' | 'error'>('idle')
   const [viesName, setViesName] = useState<string | null>(null)
+  const [viesRaw, setViesRaw] = useState<Record<string, unknown> | null>(null)
 
   useEffect(() => {
     supabase.from('sources').select('*').order('connector_type').then(({ data }) => setSources((data ?? []) as Source[]))
@@ -76,6 +120,7 @@ export default function NewRequest() {
   async function handleVatBlur() {
     setViesStatus('idle')
     setViesName(null)
+    setViesRaw(null)
     if (!vat) {
       setExistingCompanyInfo(null)
       return
@@ -102,6 +147,7 @@ export default function NewRequest() {
       setViesStatus('error')
       return
     }
+    setViesRaw(viesData as Record<string, unknown>)
     if (viesData.valid) {
       setViesStatus('valid')
       const name = typeof viesData.name === 'string' ? viesData.name.trim() : ''
@@ -116,6 +162,16 @@ export default function NewRequest() {
 
   function toggleSource(id: string) {
     setSelectedSourceIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
+  }
+
+  function chooseTier(t: Tier) {
+    setTier(t)
+    const names = new Set<string>()
+    for (let level = 1; level <= t; level++) {
+      TIER_SOURCE_NAMES[level as Tier].forEach((n) => names.add(n))
+    }
+    const matchedIds = sources.filter((s) => names.has(s.name)).map((s) => s.id)
+    setSelectedSourceIds(matchedIds)
   }
 
   const sourcesByType = sources.reduce<Record<string, Source[]>>((acc, s) => {
@@ -155,6 +211,7 @@ export default function NewRequest() {
         financing_amount: amount ? Number(amount) : null,
         financing_type: financingType,
         financing_purpose: financingPurpose,
+        verification_tier: tier,
         branch_id: branchId || null,
         contact_email: contactEmail,
         contact_phone: contactPhone,
@@ -174,6 +231,39 @@ export default function NewRequest() {
       await supabase.from('verification_request_sources').insert(
         chosenSources.map((s) => ({ request_id: request.id, connector_type: s.connector_type, source_id: s.id }))
       )
+    }
+
+    // Se la fonte VIES era tra quelle richieste e abbiamo gia' interrogato il servizio
+    // ufficiale UE in fase di compilazione, registriamo l'acquisizione reale con la sua
+    // provenienza (nessuna autenticazione personale coinvolta: e' una banca dati pubblica).
+    const viesSource = chosenSources.find((s) => s.name === 'Verifica P.IVA (VIES)')
+    if (viesSource && viesRaw) {
+      const rawJson = JSON.stringify(viesRaw)
+      const rawHash = await sha256String(rawJson)
+      const { data: connector } = await supabase
+        .from('source_connectors')
+        .insert({
+          request_id: request.id,
+          source_id: viesSource.id,
+          authentication_method: 'api_pubblica_ue_nessuna_autenticazione_utente',
+          acquisition_id: crypto.randomUUID(),
+          acquired_at: new Date().toISOString(),
+          status: 'connected',
+          raw_response: viesRaw,
+          hash: rawHash,
+          verification_level: viesStatus === 'valid' ? 'source_acquired' : 'analyzed',
+          error_state: viesStatus === 'error' ? 'Servizio VIES non ha risposto al momento della verifica' : null,
+        })
+        .select('id')
+        .single()
+      if (connector) {
+        await supabase.from('acquisition_events').insert({
+          request_id: request.id,
+          source_connector_id: connector.id,
+          event_type: 'DATA_ACQUIRED',
+          payload: { source: 'VIES', valid: viesRaw.valid ?? null },
+        })
+      }
     }
 
     let hasBusinessPlan = false
@@ -356,6 +446,29 @@ export default function NewRequest() {
               <p className="text-xs text-black/40 mt-1">
                 Viene sottoposto a un controllo preliminare automatico basato su regole (non un'analisi AI del contenuto).
               </p>
+            </div>
+          </div>
+
+          <div className="card p-6">
+            <div className="label mb-3">Livello di verifica</div>
+            <p className="text-xs text-black/40 mb-3">
+              Scegli un pacchetto per pre-selezionare le fonti qui sotto: restano comunque modificabili una per una.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {([1, 2, 3] as Tier[]).map((t) => (
+                <button
+                  type="button"
+                  key={t}
+                  onClick={() => chooseTier(t)}
+                  className={
+                    'text-left p-3.5 rounded-lg border transition-colors ' +
+                    (tier === t ? 'border-verified bg-verified/5' : 'border-black/[0.08] hover:bg-black/[0.015]')
+                  }
+                >
+                  <div className={'text-sm font-medium mb-1 ' + (tier === t ? 'text-verified-dim' : '')}>{TIER_INFO[t].label}</div>
+                  <div className="text-xs text-black/50">{TIER_INFO[t].description}</div>
+                </button>
+              ))}
             </div>
           </div>
 

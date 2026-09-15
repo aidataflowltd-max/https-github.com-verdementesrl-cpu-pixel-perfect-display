@@ -70,6 +70,7 @@ export interface VerificationRequest {
   financing_purpose: string | null
   preliminary_check_score: number | null
   preliminary_check_notes: string | null
+  verification_tier: number | null
   status: RequestStatus
   contact_email: string | null
   contact_phone: string | null
@@ -100,6 +101,7 @@ export interface SourceConnector {
   source_id: string
   status: ConnectorStatus
   verification_level: VerificationLevel
+  authentication_method: string | null
   acquired_at: string | null
   authorization_id: string | null
   acquisition_id: string | null
@@ -155,6 +157,9 @@ export interface Anomaly {
   title: string
   description: string | null
   resolved: boolean
+  justification: string | null
+  justified_by: string | null
+  justified_at: string | null
   created_at: string
 }
 

@@ -7,10 +7,14 @@ import BankLogin from './pages/bank/BankLogin'
 import BankDashboard from './pages/bank/BankDashboard'
 import NewRequest from './pages/bank/NewRequest'
 import RequestDetail from './pages/bank/RequestDetail'
+import CompanyProfile from './pages/bank/CompanyProfile'
 import InviteFlow from './pages/company/InviteFlow'
 import CompanyDashboard from './pages/company/CompanyDashboard'
 import SuperAdminLogin from './pages/admin/SuperAdminLogin'
 import SuperAdmin from './pages/admin/SuperAdmin'
+import BrokerLogin from './pages/broker/BrokerLogin'
+import BrokerDashboard from './pages/broker/BrokerDashboard'
+import NewPreCheck from './pages/broker/NewPreCheck'
 
 export default function App() {
   return (
@@ -41,6 +45,48 @@ export default function App() {
             element={
               <ProtectedRoute roles={['bank_admin', 'bank_user']}>
                 <RequestDetail />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/bank/company/:companyId"
+            element={
+              <ProtectedRoute roles={['bank_admin', 'bank_user']}>
+                <CompanyProfile />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route path="/broker/login" element={<BrokerLogin />} />
+          <Route
+            path="/broker/dashboard"
+            element={
+              <ProtectedRoute roles={['broker_admin', 'broker_user']}>
+                <BrokerDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/broker/new-check"
+            element={
+              <ProtectedRoute roles={['broker_admin', 'broker_user']}>
+                <NewPreCheck />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/broker/request/:id"
+            element={
+              <ProtectedRoute roles={['broker_admin', 'broker_user']}>
+                <RequestDetail />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/broker/company/:companyId"
+            element={
+              <ProtectedRoute roles={['broker_admin', 'broker_user']}>
+                <CompanyProfile />
               </ProtectedRoute>
             }
           />

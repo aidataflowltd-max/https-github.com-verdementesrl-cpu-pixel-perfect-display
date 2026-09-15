@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams, useLocation } from 'react-router-dom'
+import { useParams, useLocation, Link } from 'react-router-dom'
 import { PortalLayout } from '../../components/Layout'
 import { RequestStatusBadge, VerificationBadge, ConnectorStatusBadge, AnomalyBadge } from '../../components/StatusBadge'
 import { supabase } from '../../lib/supabase'
@@ -156,9 +156,20 @@ export default function RequestDetail() {
           <div>
             <div className="text-xs text-black/40 uppercase tracking-wide mb-1">Richiesta di verifica</div>
             <h1 className="text-2xl font-semibold">{request.companies?.legal_name}</h1>
-            <div className="text-sm text-black/50 mt-1">P.IVA {request.companies?.vat_number}</div>
+            <div className="text-sm text-black/50 mt-1">
+              P.IVA {request.companies?.vat_number}
+              {' · '}
+              <Link to={`${isBroker ? '/broker' : '/bank'}/company/${request.company_id}`} className="text-night hover:underline">
+                Scheda azienda →
+              </Link>
+            </div>
           </div>
-          <RequestStatusBadge status={request.status} />
+          <div className="flex items-center gap-2">
+            {request.verification_tier != null && (
+              <span className="badge bg-night/5 text-black/60">Livello {request.verification_tier}</span>
+            )}
+            <RequestStatusBadge status={request.status} />
+          </div>
         </div>
 
         {request.financing_amount != null && (
@@ -387,13 +398,11 @@ export default function RequestDetail() {
           <div className="space-y-3">
             {anomalies.length === 0 && <div className="card p-8 text-center text-sm text-black/40">Nessuna anomalia rilevata.</div>}
             {anomalies.map((a) => (
-              <div key={a.id} className="card p-4">
-                <div className="flex items-center justify-between mb-1">
-                  <div className="font-medium text-sm">{a.title}</div>
-                  <AnomalyBadge severity={a.severity} />
-                </div>
-                {a.description && <div className="text-xs text-black/50">{a.description}</div>}
-              </div>
+              <AnomalyCard
+                key={a.id}
+                anomaly={a}
+                onJustified={(updated) => setAnomalies((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))}
+              />
             ))}
           </div>
         )}
@@ -484,6 +493,93 @@ function Stat({ label, value }: { label: string; value: string }) {
     <div>
       <div className="text-2xl font-semibold">{value}</div>
       <div className="text-xs text-black/40 mt-1">{label}</div>
+    </div>
+  )
+}
+
+function AnomalyCard({ anomaly, onJustified }: { anomaly: Anomaly; onJustified: (a: Anomaly) => void }) {
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState(anomaly.justification ?? '')
+  const [saving, setSaving] = useState(false)
+
+  async function save() {
+    if (!text.trim()) return
+    setSaving(true)
+    const { data: userData } = await supabase.auth.getUser()
+    const { data, error } = await supabase
+      .from('anomalies')
+      .update({
+        justification: text.trim(),
+        justified_by: userData?.user?.id ?? null,
+        justified_at: new Date().toISOString(),
+        resolved: true,
+      })
+      .eq('id', anomaly.id)
+      .select('*')
+      .single()
+    setSaving(false)
+    if (!error && data) {
+      await logAudit({
+        requestId: anomaly.request_id,
+        actorType: 'bank',
+        eventType: 'ANOMALY_JUSTIFIED',
+        metadata: { anomalyId: anomaly.id, title: anomaly.title },
+      })
+      onJustified(data as Anomaly)
+      setEditing(false)
+    }
+  }
+
+  return (
+    <div className="card p-4">
+      <div className="flex items-center justify-between mb-1">
+        <div className="font-medium text-sm">{anomaly.title}</div>
+        <div className="flex items-center gap-2">
+          {anomaly.resolved && anomaly.justification && <span className="badge bg-verified/10 text-verified-dim">Giustificata</span>}
+          <AnomalyBadge severity={anomaly.severity} />
+        </div>
+      </div>
+      {anomaly.description && <div className="text-xs text-black/50">{anomaly.description}</div>}
+
+      {anomaly.justification && !editing && (
+        <div className="mt-3 bg-paper-dim rounded-lg px-3 py-2">
+          <div className="text-xs text-black/40 uppercase tracking-wide mb-0.5">Giustificativo</div>
+          <div className="text-sm text-black/70">{anomaly.justification}</div>
+          {anomaly.justified_at && (
+            <div className="text-xs text-black/30 mt-1">Inserito il {new Date(anomaly.justified_at).toLocaleString('it-IT')}</div>
+          )}
+          <button className="text-xs font-medium text-night hover:underline mt-1" onClick={() => setEditing(true)}>Modifica</button>
+        </div>
+      )}
+
+      {(!anomaly.justification || editing) && (
+        <div className="mt-3">
+          {!editing && !anomaly.justification && (
+            <button className="text-xs font-medium text-night hover:underline" onClick={() => setEditing(true)}>
+              + Aggiungi giustificativo
+            </button>
+          )}
+          {editing && (
+            <div className="space-y-2">
+              <textarea
+                className="input text-sm"
+                rows={2}
+                placeholder="Spiega perché questa discrepanza è accettabile (es. resa merce registrata l'anno successivo, causa nota)…"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+              />
+              <div className="flex gap-2">
+                <button className="btn-verified text-xs px-3 py-1.5" disabled={saving || !text.trim()} onClick={save}>
+                  {saving ? 'Salvataggio…' : 'Salva giustificativo'}
+                </button>
+                <button className="btn-ghost text-xs px-3 py-1.5" onClick={() => { setEditing(false); setText(anomaly.justification ?? '') }}>
+                  Annulla
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

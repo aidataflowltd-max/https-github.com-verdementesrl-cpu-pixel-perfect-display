@@ -54,6 +54,7 @@ export function AnomalyBadge({ severity }: { severity: AnomalySeverity }) {
 
 export function RequestStatusBadge({ status }: { status: RequestStatus }) {
   const map: Record<RequestStatus, { label: string; color: string; bg: string }> = {
+    preliminary: { label: 'Pre-verifica broker', color: '#9aa1ac', bg: '#f1f2f4' },
     new: { label: 'Nuova', color: '#5b8def', bg: '#eaf0fd' },
     awaiting_company: { label: 'In attesa cliente', color: '#f2b134', bg: '#fef6e6' },
     in_verification: { label: 'In verifica', color: '#5b8def', bg: '#eaf0fd' },
