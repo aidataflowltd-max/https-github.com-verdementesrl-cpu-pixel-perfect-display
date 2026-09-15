@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { supabase, supabaseConfigured } from '../../lib/supabase'
 import { logAudit } from '../../lib/audit'
 
@@ -57,7 +57,8 @@ export default function BankLogin() {
           </form>
         </div>
         <p className="text-center text-xs text-black/40 mt-6">
-          Le utenze banca vengono create dal Super Admin di VERIFIED.
+          Sei un operatore della tua banca ma non hai ancora un account?{' '}
+          <Link to="/bank/signup" className="text-night hover:underline">Registrati</Link>
         </p>
       </div>
     </div>

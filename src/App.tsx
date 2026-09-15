@@ -4,10 +4,12 @@ import { ProtectedRoute } from './components/ProtectedRoute'
 
 import Landing from './pages/Landing'
 import BankLogin from './pages/bank/BankLogin'
+import BankSignup from './pages/bank/BankSignup'
 import BankDashboard from './pages/bank/BankDashboard'
 import NewRequest from './pages/bank/NewRequest'
 import RequestDetail from './pages/bank/RequestDetail'
 import CompanyProfile from './pages/bank/CompanyProfile'
+import Team from './pages/bank/Team'
 import InviteFlow from './pages/company/InviteFlow'
 import CompanyDashboard from './pages/company/CompanyDashboard'
 import SuperAdminLogin from './pages/admin/SuperAdminLogin'
@@ -24,6 +26,7 @@ export default function App() {
           <Route path="/" element={<Landing />} />
 
           <Route path="/bank/login" element={<BankLogin />} />
+          <Route path="/bank/signup" element={<BankSignup />} />
           <Route
             path="/bank/dashboard"
             element={
@@ -53,6 +56,14 @@ export default function App() {
             element={
               <ProtectedRoute roles={['bank_admin', 'bank_user']}>
                 <CompanyProfile />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/bank/team"
+            element={
+              <ProtectedRoute roles={['bank_admin', 'bank_user']}>
+                <Team />
               </ProtectedRoute>
             }
           />

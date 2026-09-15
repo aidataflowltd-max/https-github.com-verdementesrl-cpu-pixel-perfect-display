@@ -3,12 +3,14 @@ import { useParams, useLocation, Link } from 'react-router-dom'
 import { PortalLayout } from '../../components/Layout'
 import { RequestStatusBadge, VerificationBadge } from '../../components/StatusBadge'
 import { supabase } from '../../lib/supabase'
+import { useAuth } from '../../lib/AuthContext'
 import type { Company, VerificationRequest, DataProvenance, DocumentRow, Anomaly } from '../../lib/types'
 
-const BANK_NAV = [
+const BANK_NAV_BASE = [
   { to: '/bank/dashboard', label: 'Richieste' },
   { to: '/bank/new-request', label: 'Nuova Richiesta' },
 ]
+const BANK_NAV_ADMIN = [...BANK_NAV_BASE, { to: '/bank/team', label: 'Team' }]
 
 const BROKER_NAV = [
   { to: '/broker/dashboard', label: 'Pratiche' },
@@ -31,7 +33,8 @@ export default function CompanyProfile() {
   const { companyId } = useParams()
   const location = useLocation()
   const isBroker = location.pathname.startsWith('/broker')
-  const NAV = isBroker ? BROKER_NAV : BANK_NAV
+  const { profile } = useAuth()
+  const NAV = isBroker ? BROKER_NAV : (profile?.role === 'bank_admin' ? BANK_NAV_ADMIN : BANK_NAV_BASE)
   const PORTAL_TITLE = isBroker ? 'Broker Portal' : 'Bank Portal'
 
   const [company, setCompany] = useState<Company | null>(null)
@@ -52,9 +55,6 @@ export default function CompanyProfile() {
     const { data: comp } = await supabase.from('companies').select('*').eq('id', companyId).maybeSingle()
     setCompany(comp as Company | null)
 
-    // RLS filtra gia' automaticamente: una banca vede solo le proprie pratiche
-    // su questa azienda, un broker solo quelle che ha gestito lui. Nessuna
-    // banca vede mai le pratiche aperte da un'altra banca sulla stessa azienda.
     const { data: reqs } = await supabase
       .from('verification_requests')
       .select('*, companies(*), banks(*)')

@@ -17,6 +17,8 @@ export type AuditEventType =
   | 'REQUEST_CREATED'
   | 'ADMIN_ACTION'
   | 'ANOMALY_JUSTIFIED'
+  | 'OPERATOR_REGISTERED'
+  | 'VAT_QUICK_CHECK'
 
 export async function logAudit(params: {
   requestId?: string | null
